@@ -129,5 +129,10 @@ dmypy.json
 .pyre/
 
 # Proprietary data
-.fit
-.fits
+*.fit
+*.fits
+
+# Non-code files
+*.pdf
+*.png
+*.jpg
