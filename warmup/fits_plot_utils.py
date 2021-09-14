@@ -515,7 +515,7 @@ def plot_img_linear(
     )
     plt.show()
 
-def cutout(data, center, shape, wcs=None, header=None):
+def cutout(data, center, shape, wcs=None, header=None, mode="trim"):
     """
     Convenience wrapper for astropy's Cutout2D class.
 
@@ -523,7 +523,7 @@ def cutout(data, center, shape, wcs=None, header=None):
       data :: 2D array
         The data from which to extract the cutout
       center :: 2-tuple of int or `astropy.coordinates.SkyCoord`
-        The center of the cutout
+        The (x,y) center of the cutout
       shape :: 2-tuple of int or `astropy.units.Quantity`
         The (vertical, horizontal) dimensions of the cutout
       wcs :: `astropy.wcs.WCS` (optional, default: None)
@@ -532,6 +532,8 @@ def cutout(data, center, shape, wcs=None, header=None):
       header :: `astropy.io.fits.header.Header` (optional, default: None)
         The header to the .fits file used to extract WCS data. If wcs and header provided,
         wcs parameter will take precedence
+      mode :: str (optional, default: "trim")
+        The Cutout2D mode ("trim", "partial", or "strict")
 
     Returns: data_cut, wcs_cut
       data_cut :: 2D array
@@ -544,7 +546,7 @@ def cutout(data, center, shape, wcs=None, header=None):
         warnings.warn("wcs and header both provided. Will use wcs for Cutout2D")
     elif header is not None:
         wcs = WCS(header)
-    cutout = Cutout2D(data, center, shape, wcs=wcs)
+    cutout = Cutout2D(data, center, shape, wcs=wcs, mode=mode)
     data_cut = cutout.data
     wcs_cut = cutout.wcs
     return data_cut, wcs_cut
