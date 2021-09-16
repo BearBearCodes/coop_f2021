@@ -515,6 +515,7 @@ def plot_img_linear(
     )
     plt.show()
 
+
 def cutout(data, center, shape, wcs=None, header=None, mode="trim"):
     """
     Convenience wrapper for astropy's Cutout2D class.
@@ -546,7 +547,62 @@ def cutout(data, center, shape, wcs=None, header=None, mode="trim"):
         warnings.warn("wcs and header both provided. Will use wcs for Cutout2D")
     elif header is not None:
         wcs = WCS(header)
-    cutout = Cutout2D(data, center, shape, wcs=wcs, mode=mode)
-    data_cut = cutout.data
-    wcs_cut = cutout.wcs
+    cutout_obj = Cutout2D(data, center, shape, wcs=wcs, mode=mode)
+    data_cut = cutout_obj.data
+    wcs_cut = cutout_obj.wcs
     return data_cut, wcs_cut
+
+
+def line_profile(data, start, end):
+    """
+    Returns the profile of some 2D data along a line specified by the start and end
+    points. Uses very rough nearest-neighbour sampling.
+
+    Parameters:
+      data :: 2D array
+        The data to be profiled
+      start :: 2-tuple of int
+        (x, y) pixel coordinates of the start point
+      end :: 2-tuple of int
+        (x, y) pixel coordinates of the end point
+
+    Returns: profile
+      profile :: 1D array
+        The line profile of the data
+    """
+    x0, y0 = start
+    x1, y1 = end
+    length = int(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2))
+    x_idx = np.linspace(x0, x1, length).astype(int)
+    y_idx = np.linspace(y0, y1, length).astype(int)
+    profile = data[y_idx, x_idx]  # array indexing is [row, col]
+    return profile
+
+
+def line_profile_idx(data, start, end):
+    """
+    Returns the profile of some 2D data along a line specified by the start and end
+    points. Also returns the x and y pixel indices of the line. Uses
+    very rough nearest-neighbour sampling.
+
+    Parameters:
+      data :: 2D array
+        The data to be profiled
+      start :: 2-tuple of int
+        (x, y) pixel coordinates of the start point
+      end :: 2-tuple of int
+        (x, y) pixel coordinates of the end point
+
+    Returns: profile
+      profile :: 1D array
+        The line profile of the data
+      x_idx, y_idx :: 1D arrays
+        The pixel coordinates of the line
+    """
+    x0, y0 = start
+    x1, y1 = end
+    length = int(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2))
+    x_idx = np.linspace(x0, x1, length).astype(int)
+    y_idx = np.linspace(y0, y1, length).astype(int)
+    profile = data[y_idx, x_idx]  # array indexing is [row, col]
+    return profile, x_idx, y_idx
