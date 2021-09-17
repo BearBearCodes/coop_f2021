@@ -653,27 +653,34 @@ def line_profile_idx(data, start, end, wcs=None, extend=False):
         # Find number of subtractions to get to edges of image
         # FIXME: bug somewhere here
         # (probably the -1 + factor combination for negative slope)
-        start_to_left = x0 / unit_x
-        start_to_right = (np.shape(data)[1] - 1 - x0) / unit_x  # data indices: [row, col]
-        end_to_left = x1 / unit_x
-        end_to_right = (np.shape(data)[1] - 1 - x1) / unit_x
-        start_to_bottom = y0 / unit_y
-        start_to_top = (np.shape(data)[0] - 1 - y0) / unit_y  # data indices: [row, col]
-        end_to_bottom = y1 / unit_y
-        end_to_top = (np.shape(data)[0] - 1 - y1) / unit_y
+        if unit_x != 0:  # ! Just a quick band-aid for now. Will clean up
+            start_to_left = x0 / unit_x
+            start_to_right = (np.shape(data)[1] - 1 - x0) / unit_x  # data indices: [row, col]
+            end_to_left = x1 / unit_x
+            end_to_right = (np.shape(data)[1] - 1 - x1) / unit_x
+        else:
+            start_to_left = start_to_right = end_to_left = end_to_right = np.nan
+        if unit_y != 0:
+            start_to_bottom = y0 / unit_y
+            start_to_top = (np.shape(data)[0] - 1 - y0) / unit_y  # data indices: [row, col]
+            end_to_bottom = y1 / unit_y
+            end_to_top = (np.shape(data)[0] - 1 - y1) / unit_y
+        else:
+            start_to_bottom = start_to_top = end_to_bottom = end_to_top = np.nan
+            #
+            dist_to_bottom = np.nanmin([start_to_bottom, end_to_bottom])
+            dist_to_left = np.nanmin([start_to_left, end_to_left])
+            dist_to_top = np.nanmin([start_to_top, end_to_top])
+            dist_to_right = np.nanmin([start_to_right, end_to_right])
         #
-        dist_to_bottom = np.min([start_to_bottom, end_to_bottom])
-        dist_to_left = np.min([start_to_left, end_to_left])
-        dist_to_top = np.min([start_to_top, end_to_top])
-        dist_to_right = np.min([start_to_right, end_to_right])
-        #
-        slope = unit_y / unit_x
+        slope = unit_y / unit_x if unit_x != 0 else np.nan
         if slope > 0:  # positive slope
             print("Positive slope")
             # Find distance to bottom or left edge, whichever is closer
             dist_to_bottomleft = np.min([dist_to_bottom, dist_to_left])
             if dist_to_bottomleft == dist_to_bottom:
-                diff = int(dist_to_bottomleft * unit_y)
+                diffy = int(dist_to_bottomleft * unit_y)
+                diffx = diffy * unit_x
                 # if dist_to_bottom == start_to_bottom:
                 #     y0 -= diff  # should now be 0
                 #     x0 -= diff
@@ -681,7 +688,8 @@ def line_profile_idx(data, start, end, wcs=None, extend=False):
                 #     y1 -= diff  # should now be 0
                 #     x1 -= diff
             else:
-                diff = int(dist_to_bottomleft * unit_x)
+                diffx = int(dist_to_bottomleft * unit_x)
+                diffy = diffx * unit_y
                 # if dist_to_left == start_to_left:
                 #     x0 -= diff  # should now be 0
                 #     y0 -= diff
@@ -690,66 +698,74 @@ def line_profile_idx(data, start, end, wcs=None, extend=False):
                 #     y1 -= diff
             # Move point to bottom or left adge
             if dist_to_bottomleft in [start_to_left, start_to_bottom]:
-                    x0 -= diff
-                    y0 -= diff
+                    x0 -= diffx
+                    y0 -= diffy
                     moved_start = True
             else:
-                    x1 -= diff
-                    y1 -= diff
+                    x1 -= diffx
+                    y1 -= diffy
                     moved_start = False
             # Find distance to top or right edge, whichever is closer
             dist_to_topright = np.min([dist_to_top, dist_to_right])
             if dist_to_topright == dist_to_top:
-                diff = int(dist_to_topright * unit_y)
+                diffy = int(dist_to_topright * unit_y)
+                diffx = diffy * unit_x
             else:
-                diff = int(dist_to_topright * unit_x)
+                diffx = int(dist_to_topright * unit_x)
+                diffy = diffx * unit_y
             # Move the remaining point to the top or right edge
             if moved_start:
-                x1 += diff
-                y1 += diff
+                x1 += diffx
+                y1 += diffy
             else:
-                x0 += diff
-                y0 += diff
+                x0 += diffx
+                y0 += diffy
         elif slope < 0:  # negative slope
             print("Negative slope")
+            print("STILL VERY BUGGY!")
             # Find distance to top or left edge, whichever is closer
             dist_to_topleft = np.min([dist_to_top, dist_to_left])
             if dist_to_topleft == dist_to_top:
-                diff = int(dist_to_topleft * unit_y)
+                diffy = int(dist_to_topleft * unit_y)
+                diffx = diffy * unit_x
                 factor = -1  # to convert - to + later
             else:
-                diff = int(dist_to_topleft * unit_x)
+                diffx = int(dist_to_topleft * unit_x)
+                diffy = diffx * unit_y
                 factor = 1
             # Move point to top or left edge
             if dist_to_topleft in [start_to_left, start_to_top]:
-                x0 -= diff * factor
-                y0 -= diff * factor
+                x0 -= diffx * factor
+                y0 -= diffy * factor
                 moved_start = True
             else:
-                x1 -= diff * factor
-                y1 -= diff * factor
+                x1 -= diffx * factor
+                y1 -= diffy * factor
                 moved_start = False
             # Find distance to bottom or right edge, whichever is closer
             dist_to_bottomright = np.min([dist_to_bottom, dist_to_right])
             if dist_to_bottomright == dist_to_bottom:
-                diff = int(dist_to_bottomright * unit_y)
+                diffy = int(dist_to_bottomright * unit_y)
+                diffx = diffy * unit_x
                 factor = -1  # to convert + to - later
             else:
-                diff = int(dist_to_bottomright * unit_x)
+                diffx = int(dist_to_bottomright * unit_x)
+                diffy = diffx * unit_y
                 factor = 1
             # Move the remaining point to the bottom or right edge
             if moved_start:
-                x1 += diff * factor
-                y1 += diff * factor
+                x1 += diffx * factor
+                y1 += diffy * factor
             else:
-                x0 += diff * factor
-                y0 += diff * factor
+                x0 += diffx * factor
+                y0 += diffy * factor
         elif slope == 0:  # zero (horizontal) slope
             print("Zero slope")
             # Extend to left/right edges
             x0 = 0 if start_to_left < start_to_right else np.shape(data)[1] - 1
             x1 = np.shape(data)[1] - 1 if end_to_right < end_to_left else 0
         else:  # vertical slope
+            # FIXME: sometimes returns size 0 (almost definitely the inequalities & NaNs)
             print("Vertical slope")
             # Extend to bottom/top edges
             y0 = 0 if start_to_bottom < start_to_top else np.shape(data)[0] - 1
@@ -761,3 +777,4 @@ def line_profile_idx(data, start, end, wcs=None, extend=False):
     y_idx = np.linspace(y0, y1, length).astype(int)
     profile = data[y_idx, x_idx]  # array indexing is [row, col]
     return profile, x_idx, y_idx
+
