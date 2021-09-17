@@ -11,11 +11,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import astropy.units as u
+import astropy.coordinates as coord
 from astropy.io import fits
 from astropy.wcs import WCS
 from astropy.nddata import Cutout2D
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-from astropy.wcs.utils import proj_plane_pixel_scales
+from astropy.wcs.utils import proj_plane_pixel_scales, skycoord_to_pixel
 import copy
 import warnings
 
@@ -553,7 +554,7 @@ def cutout(data, center, shape, wcs=None, header=None, mode="trim"):
     return data_cut, wcs_cut
 
 
-def line_profile(data, start, end):
+def line_profile(data, start, end, wcs=None):
     """
     Returns the profile of some 2D data along a line specified by the start and end
     points. Uses very rough nearest-neighbour sampling.
@@ -561,15 +562,29 @@ def line_profile(data, start, end):
     Parameters:
       data :: 2D array
         The data to be profiled
-      start :: 2-tuple of int
-        (x, y) pixel coordinates of the start point
-      end :: 2-tuple of int
-        (x, y) pixel coordinates of the end point
+      start :: 2-tuple of int or `astropy.coordinates.SkyCoord` object
+        If tuple, (x, y) pixel coordinates of the start point. If SkyCoord, the WCS (e.g.,
+        from the header using astropy.wcs.WCS(header)) must also be provided using the wcs
+        parameter. N.B. converting pixel coordinates to SkyCoords and back to pixel
+        coordinates (e.g., using astropy functions) may not give exactly the same
+        coordinates
+      end :: 2-tuple of int or `astropy.coordinates.SkyCoord` object
+        If tuple, (x, y) pixel coordinates of the end point. If SkyCoord, the WCS (e.g.,
+        from the header using astropy.wcs.WCS(header)) must also be provided using the wcs
+        parameter. N.B. converting pixel coordinates to SkyCoords and back to pixel
+        coordinates (e.g., using astropy functions) may not give exactly the same
+        coordinates
+      wcs :: `astropy.wcs.WCS` object (optional, default: None)
+        The world coordinate system to transform SkyCoord objects to pixel coordinates
 
     Returns: profile
       profile :: 1D array
         The line profile of the data
     """
+    if isinstance(start, coord.SkyCoord):
+        start = skycoord_to_pixel(start, wcs=wcs)
+    if isinstance(end, coord.SkyCoord):
+        end = skycoord_to_pixel(end, wcs=wcs)
     x0, y0 = start
     x1, y1 = end
     length = int(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2))
@@ -579,7 +594,7 @@ def line_profile(data, start, end):
     return profile
 
 
-def line_profile_idx(data, start, end):
+def line_profile_idx(data, start, end, wcs=None, extend=False):
     """
     Returns the profile of some 2D data along a line specified by the start and end
     points. Also returns the x and y pixel indices of the line. Uses
@@ -588,10 +603,30 @@ def line_profile_idx(data, start, end):
     Parameters:
       data :: 2D array
         The data to be profiled
-      start :: 2-tuple of int
-        (x, y) pixel coordinates of the start point
-      end :: 2-tuple of int
-        (x, y) pixel coordinates of the end point
+      start :: 2-tuple of int or `astropy.coordinates.SkyCoord` object
+        If tuple, (x, y) pixel coordinates of the start point. If SkyCoord, the WCS (e.g.,
+        from the header using astropy.wcs.WCS(header)) must also be provided using the wcs
+        parameter. N.B. converting pixel coordinates to SkyCoords and back to pixel
+        coordinates (e.g., using astropy functions) may not give exactly the same
+        coordinates
+      end :: 2-tuple of int or `astropy.coordinates.SkyCoord` object
+        If tuple, (x, y) pixel coordinates of the end point. If SkyCoord, the WCS (e.g.,
+        from the header using astropy.wcs.WCS(header)) must also be provided using the wcs
+        parameter. N.B. converting pixel coordinates to SkyCoords and back to pixel
+        coordinates (e.g., using astropy functions) may not give exactly the same
+        coordinates because skycoord_to_pixel() returns floats
+      wcs :: `astropy.wcs.WCS` object (optional, default: None)
+        The world coordinate system to transform SkyCoord objects to pixel coordinates
+      extend :: bool
+        If True, extend the line defined by the start and end points to the edges of the
+        image. If False, the line profile is only evaluated between the start and end
+        points. Note that, because the coordinates are all integers, extending the line to
+        the edge may not be exactly coincident with the line segment defined by the start
+        and end points and may not go exactly to the edges. The final start and end points
+        can be found using the returned idx arrays. That is, start = (x_idx[0], y_idx[0])
+        and end = (x_idx[-1], y_idx[-1])
+
+    ! FIXME: the extend parameter is not working as intended
 
     Returns: profile
       profile :: 1D array
@@ -599,9 +634,129 @@ def line_profile_idx(data, start, end):
       x_idx, y_idx :: 1D arrays
         The pixel coordinates of the line
     """
+    if isinstance(start, coord.SkyCoord):
+        start = skycoord_to_pixel(start, wcs=wcs)
+        start = (int(start[0]), int(start[1]))
+    if isinstance(end, coord.SkyCoord):
+        end = skycoord_to_pixel(end, wcs=wcs)
+        end = (int(end[0]), int(end[1]))
+    if list(map(type, start)) != [int, int] or list(map(type, end)) != [int, int]:
+        raise ValueError("start and end must be 2-tuples of ints or SkyCoord objects")
+    if start == end:
+        raise ValueError("start and end points must be different")
     x0, y0 = start
     x1, y1 = end
     length = int(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2))
+    if extend:
+        unit_x = (x1 - x0) / length
+        unit_y = (y1 - y0) / length
+        # Find number of subtractions to get to edges of image
+        # FIXME: bug somewhere here
+        # (probably the -1 + factor combination for negative slope)
+        start_to_left = x0 / unit_x
+        start_to_right = (np.shape(data)[1] - 1 - x0) / unit_x  # data indices: [row, col]
+        end_to_left = x1 / unit_x
+        end_to_right = (np.shape(data)[1] - 1 - x1) / unit_x
+        start_to_bottom = y0 / unit_y
+        start_to_top = (np.shape(data)[0] - 1 - y0) / unit_y  # data indices: [row, col]
+        end_to_bottom = y1 / unit_y
+        end_to_top = (np.shape(data)[0] - 1 - y1) / unit_y
+        #
+        dist_to_bottom = np.min([start_to_bottom, end_to_bottom])
+        dist_to_left = np.min([start_to_left, end_to_left])
+        dist_to_top = np.min([start_to_top, end_to_top])
+        dist_to_right = np.min([start_to_right, end_to_right])
+        #
+        slope = unit_y / unit_x
+        if slope > 0:  # positive slope
+            print("Positive slope")
+            # Find distance to bottom or left edge, whichever is closer
+            dist_to_bottomleft = np.min([dist_to_bottom, dist_to_left])
+            if dist_to_bottomleft == dist_to_bottom:
+                diff = int(dist_to_bottomleft * unit_y)
+                # if dist_to_bottom == start_to_bottom:
+                #     y0 -= diff  # should now be 0
+                #     x0 -= diff
+                # else:
+                #     y1 -= diff  # should now be 0
+                #     x1 -= diff
+            else:
+                diff = int(dist_to_bottomleft * unit_x)
+                # if dist_to_left == start_to_left:
+                #     x0 -= diff  # should now be 0
+                #     y0 -= diff
+                # else:
+                #     x1 -= diff  # should now be 0
+                #     y1 -= diff
+            # Move point to bottom or left adge
+            if dist_to_bottomleft in [start_to_left, start_to_bottom]:
+                    x0 -= diff
+                    y0 -= diff
+                    moved_start = True
+            else:
+                    x1 -= diff
+                    y1 -= diff
+                    moved_start = False
+            # Find distance to top or right edge, whichever is closer
+            dist_to_topright = np.min([dist_to_top, dist_to_right])
+            if dist_to_topright == dist_to_top:
+                diff = int(dist_to_topright * unit_y)
+            else:
+                diff = int(dist_to_topright * unit_x)
+            # Move the remaining point to the top or right edge
+            if moved_start:
+                x1 += diff
+                y1 += diff
+            else:
+                x0 += diff
+                y0 += diff
+        elif slope < 0:  # negative slope
+            print("Negative slope")
+            # Find distance to top or left edge, whichever is closer
+            dist_to_topleft = np.min([dist_to_top, dist_to_left])
+            if dist_to_topleft == dist_to_top:
+                diff = int(dist_to_topleft * unit_y)
+                factor = -1  # to convert - to + later
+            else:
+                diff = int(dist_to_topleft * unit_x)
+                factor = 1
+            # Move point to top or left edge
+            if dist_to_topleft in [start_to_left, start_to_top]:
+                x0 -= diff * factor
+                y0 -= diff * factor
+                moved_start = True
+            else:
+                x1 -= diff * factor
+                y1 -= diff * factor
+                moved_start = False
+            # Find distance to bottom or right edge, whichever is closer
+            dist_to_bottomright = np.min([dist_to_bottom, dist_to_right])
+            if dist_to_bottomright == dist_to_bottom:
+                diff = int(dist_to_bottomright * unit_y)
+                factor = -1  # to convert + to - later
+            else:
+                diff = int(dist_to_bottomright * unit_x)
+                factor = 1
+            # Move the remaining point to the bottom or right edge
+            if moved_start:
+                x1 += diff * factor
+                y1 += diff * factor
+            else:
+                x0 += diff * factor
+                y0 += diff * factor
+        elif slope == 0:  # zero (horizontal) slope
+            print("Zero slope")
+            # Extend to left/right edges
+            x0 = 0 if start_to_left < start_to_right else np.shape(data)[1] - 1
+            x1 = np.shape(data)[1] - 1 if end_to_right < end_to_left else 0
+        else:  # vertical slope
+            print("Vertical slope")
+            # Extend to bottom/top edges
+            y0 = 0 if start_to_bottom < start_to_top else np.shape(data)[0] - 1
+            y1 = np.shape(data)[0] - 1 if end_to_top < end_to_bottom else 0
+        print(x0, y0, x1, y1)
+        # Re-evaluate length
+        length = int(np.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2))
     x_idx = np.linspace(x0, x1, length).astype(int)
     y_idx = np.linspace(y0, y1, length).astype(int)
     profile = data[y_idx, x_idx]  # array indexing is [row, col]
