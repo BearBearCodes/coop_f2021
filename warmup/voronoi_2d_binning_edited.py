@@ -211,7 +211,7 @@ def _accretion(x, y, signal, noise, targetSN, pixelsize, quiet, sn_func):
         currentBin = unBinned[k]    # The bin is initially made of one pixel
         SN = sn_func(currentBin, signal, noise)
 
-    classe *= ~good  # Set to zero all bins that did not reach the target S/N
+    classe *= good  # Set to zero all bins that did not reach the target S/N
     # ! CHANGING THE ABOVE TO ~good DOES NOT HELP. IT CHANGES RESULTS BUT RESULTS STILL BAD!
 
     return classe, pixelsize
