@@ -5,6 +5,8 @@ Utilities for generating plots (e.g., imshow, contour, contourf) from FITS files
 Originally developed for NGVS and VERTICO data processing.
 
 Isaac Cheng - September 2021
+
+TODO: maybe add a function to generate RGB images?
 """
 
 import numpy as np

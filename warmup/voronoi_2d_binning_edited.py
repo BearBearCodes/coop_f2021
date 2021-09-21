@@ -212,7 +212,6 @@ def _accretion(x, y, signal, noise, targetSN, pixelsize, quiet, sn_func):
         SN = sn_func(currentBin, signal, noise)
 
     classe *= good  # Set to zero all bins that did not reach the target S/N
-    # ! CHANGING THE ABOVE TO ~good DOES NOT HELP. IT CHANGES RESULTS BUT RESULTS STILL BAD!
 
     return classe, pixelsize
 
@@ -226,9 +225,6 @@ def _reassign_bad_bins(classe, x, y):
     # Find the centroid of all successful bins.
     # CLASS = 0 are unbinned pixels which are excluded.
     #
-    print("classe", classe)  # ! classe is all zero
-    # print("x", x)
-    # print("y", y)
     good = np.unique(classe[classe > 0])
     xnode = ndimage.mean(x, labels=classe, index=good)
     ynode = ndimage.mean(y, labels=classe, index=good)
@@ -238,12 +234,12 @@ def _reassign_bad_bins(classe, x, y):
     #
     bad = classe == 0
     index = voronoi_tessellation(x[bad], y[bad], xnode, ynode, [1])
-    # * MY CHANGES
-    print("index:", index)
-    print("index shape", index.shape)
-    print("index sum", np.sum(index))
-    print("good:", good)
-    # * END MY CHANGES
+    # # * BEGIN MY CHANGES
+    # print("index:", index)
+    # print("index shape", index.shape)
+    # print("index sum", np.sum(index))
+    # print("good:", good)
+    # # * END MY CHANGES
     classe[bad] = good[index]
 
     # Recompute all centroids of the reassigned bins.
@@ -602,7 +598,9 @@ def voronoi_2d_binning(x, y, signal, noise, targetSN, cvt=True,
         plt.subplot(211)
         rnd = np.argsort(np.random.random(xnode.size))  # Randomize bin colors
         _display_pixels(x, y, rnd[classe], pixelsize)
-        plt.plot(xnode, ynode, '+w', scalex=False, scaley=False) # do not rescale after imshow()
+        # * BEGIN MY CHANGES (commented out nodes)
+        # plt.plot(xnode, ynode, '+w', scalex=False, scaley=False) # do not rescale after imshow()
+        # * END MY CHANGES
         plt.xlabel('R (arcsec)')
         plt.ylabel('R (arcsec)')
         plt.title('Map of Voronoi bins')
@@ -618,10 +616,11 @@ def voronoi_2d_binning(x, y, signal, noise, targetSN, cvt=True,
         plt.axis([np.min(rad), np.max(rad), 0, np.max(sn)*1.05])  # x0, x1, y0, y1
         plt.axhline(targetSN)
         plt.legend()
-        # * ADDED MY CODE
-        plt.savefig("/arc/home/IsaacCheng/coop_f2021/warmup/voronoi_debug2.pdf")
-        print("Saved!")
-        # * END ADDITIONS
+        # * BEGIN MY CHANGES
+        myfilepath = "/arc/home/IsaacCheng/coop_f2021/warmup/voronoi_debug3.pdf"
+        plt.savefig(myfilepath)
+        print(myfilepath, "- Saved!")
+        # * END MY CHANGES
 
     return classe, xnode, ynode, xBar, yBar, sn, area, scale
 
