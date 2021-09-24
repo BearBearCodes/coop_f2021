@@ -1110,7 +1110,7 @@ def txt_data(
 ):
     id_arr = np.array(
         [str(x).zfill(2) + str(y).zfill(2) for x, y in zip(xs.flatten(), ys.flatten())]
-    ).flatten()
+    )
     df = pd.DataFrame(
         {
             "id": id_arr,
