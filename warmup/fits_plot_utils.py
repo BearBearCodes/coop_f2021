@@ -11,14 +11,17 @@ TODO: maybe add a function to generate RGB images?
 
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
+import dill
 import matplotlib as mpl
 import astropy.units as u
 import astropy.coordinates as coord
 from astropy.io import fits
 from astropy.wcs import WCS
-from astropy.nddata import Cutout2D
+from astropy.nddata import Cutout2D, block_reduce
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 from astropy.wcs.utils import proj_plane_pixel_scales, skycoord_to_pixel
+import reproject
 import copy
 import warnings
 
@@ -780,3 +783,347 @@ def line_profile_idx(data, start, end, wcs=None, extend=False):
     profile = data[y_idx, x_idx]  # array indexing is [row, col]
     return profile, x_idx, y_idx
 
+
+def calc_colour_err(blue, red, blue_err, red_err):
+    """
+    Calculates the uncertainty in the colour index using basic uncertainty propagation.
+    The colour, or colour index, is defined as:
+                        colour = -2.5 * log10(blue / red)
+    where blue is the flux in the shorter wavelength band and red is the flux in the
+    longer wavelength band.
+    The uncertainty, assuming independent errors and to a first-order approximation, is
+    given by:
+            colour_err^2 = (-2.5/ln(10) * 1/blue)^2 * blue_err^2 +
+                           (+2.5/ln(10) * 1/red)^2 * red_err^2
+                         = (2.5/ln(10))^2 * [(blue_err/blue)^2 + (red_err/red)^2]
+    Thus:
+            colour_err = sqrt(colour_err^2)
+                       = 2.5 / ln(10) * sqrt((blue_err/blue)^2 + (red_err/red)^2)
+    Note that all the parameters MUST be able to broadcast together.
+
+    Parameters:
+      blue :: array
+        The flux in the shorter wavelength band
+      red :: array
+        The flux in the longer wavelength band
+      blue_err :: array
+        The uncertainty in the flux in the shorter wavelength band
+      red_err :: array
+        The uncertainty in the flux in the longer wavelength band
+
+    Returns: colour_err
+      colour_err :: array
+        The uncertainty in the colour index.
+    """
+    prefactor = 2.5 / np.log(10)
+    errs = np.sqrt((blue_err / blue) ** 2 + (red_err / red) ** 2)
+    return prefactor * errs
+
+
+def optimal_sn(index, signal, noise):
+    """
+    Signal-to-noise ratio approximation using optimal weighing of pixels.
+
+    See Eq. (3) of Cappellari & Copin (2003):
+    https://ui.adsabs.harvard.edu/abs/2003MNRAS.342..345C/abstract
+
+    Parameters: (nearly verbatim from Cappellari & Copin's voronoi_2d_binning.py)
+      index :: 1D array
+        Integer vector of length N containing the indices of
+        the spaxels for which the combined S/N has to be returned.
+        The indices refer to elements of the vectors signal and noise.
+      signal :: 1D array
+        Vector of length M>N with the signal of all spaxels.
+      noise :: 1D array
+        Vector of length M>N with the noise of all spaxels.
+
+    Returns: sn
+      sn :: 1D array
+        Scalar S/N or another quantity that needs to be equalized.
+    """
+    return np.sqrt(
+        np.sum((signal[index] / noise[index]) * (signal[index] / noise[index]))
+    )
+
+
+def prelim_bin(signal, noise, block_size=(4, 4), print_info=True, func=np.nansum):
+    """
+    Regular preliminary binning of 2D data (e.g., for Voronoi binning). Ignores NaNs.
+
+    (From astropy's block_reduce() documentation): If the data are not perfectly divisible
+    by block_size along a given axis, then the data will be trimmed (from the end) along
+    that axis.
+
+    TODO: finish docstring
+    """
+    # Add signal array using arithmetic sum
+    signal_binned = block_reduce(signal, block_size=block_size, func=func)
+    # Add noise array in quadrature
+    noise_binned = noise * noise
+    noise_binned = block_reduce(noise_binned, block_size=block_size, func=func)
+    noise_binned = np.sqrt(noise_binned)
+    #
+    # Generate pixel coordinates
+    #
+    y_coords, x_coords = np.meshgrid(
+        np.arange(signal_binned.shape[0]), np.arange(signal_binned.shape[1])
+    )
+    x_coords, y_coords = x_coords.T, y_coords.T
+    #
+    # Ensure no infs or NaNs in binned data (for Voronoi binning)
+    #
+    is_good = np.isfinite(signal_binned) & np.isfinite(noise_binned)
+    #
+    if print_info:
+        print("x_coords, y_coords, signal_binned, noise_binned shapes:",
+              x_coords.shape, y_coords.shape, signal_binned.shape, noise_binned.shape)
+        print("total bad elements (infs/NaNs):", np.sum(~is_good))
+    #
+    return signal_binned, noise_binned, x_coords, y_coords, is_good
+
+
+def get_reproject_shape_factor(target_arr, input_wcs, target_wcs):
+    #
+    # Determine reprojection shape and binning factor
+    #   N.B. reprojection shape should be as close as possible to the shape of a regular
+    #   "cut out" if the input array was cut at the boundaries of the target.
+    #
+    # Find the coordinates of the target_data's edges, assuming the data are rectangular
+    target_bottomleft = target_wcs.pixel_to_world(0, 0)
+    target_topright = target_wcs.pixel_to_world(*target_arr.shape)
+    # ? Don't know if I am passing the arguments in the right order.
+    target_centre = target_wcs.pixel_to_world(
+        target_arr.shape[1] / 2, target_arr.shape[0] / 2
+    )
+    # Map the pixels above to their corresponding pixels in the input array
+    input_bottomleft = input_wcs.world_to_pixel(target_bottomleft)
+    input_topright = input_wcs.world_to_pixel(target_topright)
+    input_centre = input_wcs.world_to_pixel(target_centre)
+    # Determine binning/transformation factor
+    input_to_target_factor = np.subtract(input_topright, input_bottomleft)
+    input_to_target_factor = np.round(
+        np.divide(input_to_target_factor, target_arr.shape)
+    ).astype(int)
+    input_reproject_shape = input_to_target_factor * target_arr.shape
+    #
+    return input_to_target_factor, input_reproject_shape
+
+
+def reproj_arr(
+    input_arr,
+    input_wcs,
+    target_wcs,
+    input_to_target_factor,
+    input_reproject_shape,
+    reproject_func=reproject.reproject_exact,
+):
+    """
+    Reproject input array to target array.
+
+    target_wcs must support CDELT keyword.
+    TODO: add support for CD[#]_[#] keywords.
+
+    Requires the reproject package: https://reproject.readthedocs.io/en/stable/
+
+    TODO: finish docstring
+    """
+    #
+    # Reproject input array to target array
+    #
+    wcs_reproject = target_wcs.deepcopy()
+    wcs_reproject.wcs.crpix = target_wcs.wcs.crpix * input_to_target_factor
+    wcs_reproject.wcs.cdelt = target_wcs.wcs.cdelt / input_to_target_factor
+    wcs_reproject.array_shape = input_reproject_shape
+    arr_reproject = reproject_func(
+        (input_arr, input_wcs),
+        wcs_reproject,
+        shape_out=input_reproject_shape,
+        return_footprint=False,
+    )
+    return arr_reproject, wcs_reproject
+
+
+def bin_snr_to_target(
+    signal_arr,
+    signal_wcs,
+    noise_arr,
+    noise_wcs,
+    target_arr,
+    target_wcs,
+    reproject_func=reproject.reproject_exact,
+    bin_func=np.nansum,
+    print_debug=False,
+):
+    """
+    Wrapper for binning an signal & noise arrays to the exact physical dimensions and
+    resolution of a target (provided via the target_wcs). The input arrays should already
+    be masked (i.e., invalid values should be set to np.nan) and the input arrays should
+    entirely contain the target_wcs (i.e., the extent of the target_data).
+
+    Requires the reproject package: https://reproject.readthedocs.io/en/stable/
+
+    target_wcs should support the CDELT keyword.
+    TODO: add support for CD[#]_[#] keywords.
+
+    TODO: finish docstring
+    """
+    if print_debug:
+        print("target_wcs:", target_wcs)
+        print()
+    #
+    # Determine reprojection shape and binning factor
+    #   N.B. reprojection shape should be as close as possible to the shape of a regular
+    #   "cut out" if the input array was cut at the boundaries of the target.
+    #
+    signal_to_target_factor, signal_reproject_shape = get_reproject_shape_factor(
+        target_arr, signal_wcs, target_wcs
+    )
+    if print_debug:
+        print("signal_to_target_factor:", signal_to_target_factor)
+        print("signal_reproject_shape:", signal_reproject_shape)
+        print()
+    noise_to_target_factor, noise_reproject_shape = get_reproject_shape_factor(
+        target_arr, noise_wcs, target_wcs
+    )
+    if np.any(signal_reproject_shape != noise_reproject_shape) or np.any(
+        signal_to_target_factor != noise_to_target_factor
+    ):
+        raise ValueError("Signal and noise arrays must have the same shape and wcs.")
+    #
+    # Reproject data
+    #
+    # N.B. signal_wcs_reproject and noise_wcs_reproject should be the same
+    signal_reproject, signal_wcs_reproject = reproj_arr(
+        signal_arr,
+        signal_wcs,
+        target_wcs,
+        signal_to_target_factor,
+        signal_reproject_shape,
+        reproject_func=reproject_func,
+    )
+    if print_debug:
+        print("signal_wcs_reproject:", signal_wcs_reproject)
+        print()
+    noise_reproject, noise_wcs_reproject = reproj_arr(
+        noise_arr,
+        noise_wcs,
+        target_wcs,
+        noise_to_target_factor,
+        noise_reproject_shape,
+        reproject_func=reproject_func,
+    )
+    #
+    # Bin to target resolution
+    #
+    signal_binned, noise_binned, x_coords, y_coords, is_good = prelim_bin(
+        signal_reproject,
+        noise_reproject,
+        block_size=signal_to_target_factor,
+        func=bin_func,
+        print_info=print_debug,
+    )
+    # Modify WCS object
+    # ? Not sure if slice argument order is correct
+    wcs_binned = signal_wcs_reproject.slice(
+        (np.s_[:: signal_to_target_factor[0]], np.s_[:: signal_to_target_factor[1]])
+    )
+    wcs_binned.wcs.crpix = signal_wcs_reproject.wcs.crpix / signal_to_target_factor
+    wcs_binned.wcs.cdelt = signal_wcs_reproject.wcs.cdelt * signal_to_target_factor
+    if print_debug:
+        print("wcs_binned:", wcs_binned)
+    #
+    return x_coords, y_coords, signal_binned, noise_binned, is_good, wcs_binned
+
+
+def plot_snr(
+    signal,
+    noise,
+    wcs,
+    contour_arr,
+    countour_wcs,
+    contour_levels=[0, 5, 10],
+    vmin=150,
+    vmax=1250,
+    band="u-band",
+):
+    snr = abs(signal / noise)
+    fig, ax = plt.subplots(subplot_kw={"projection": wcs})
+    img = ax.imshow(snr, cmap="plasma", vmin=vmin, vmax=vmax)
+    cbar = fig.colorbar(img)
+    cbar.ax.tick_params(which="both", direction="out")
+    cbar.set_label(f"{band} SNR")
+    ax.contour(
+        contour_arr,
+        transform=ax.get_transform(countour_wcs),
+        levels=contour_levels,
+        colors="w",
+    )
+    ax.set_title(f"VCC 792 / NGC 4380: {band} Data Binned")
+    ax.set_xlabel("RA (J2000)")
+    ax.set_ylabel("Dec (J2000)")
+    ax.grid(False)
+    ax.set_aspect("equal")
+    plt.show()
+
+
+def dill_data(
+    outfile,
+    reproject_method,
+    x_coords,
+    y_coords,
+    signal_binned,
+    noise_binned,
+    is_good,
+    wcs_binned,
+    wcs_binned_array_shape,
+):
+    with open(outfile, "wb") as f:
+        dill.dump(
+            {
+                "note": "Remember to set `wcs_binned.array_shape = wcs_binned_array_shape`",
+                "reproject_method": reproject_method,
+                "x_coords": x_coords,
+                "y_coords": y_coords,
+                "signal_binned": signal_binned,
+                "noise_binned": noise_binned,
+                "is_good": is_good,
+                "wcs_binned": wcs_binned,
+                "wcs_binned_array_shape": wcs_binned_array_shape,  # this is the "NAXIS" keyword
+            },
+            f,
+        )
+    print(f"Pickled {outfile}")
+
+
+def txt_data(
+    outfile,
+    xs,
+    ys,
+    u_sig,
+    u_noise,
+    g_sig,
+    g_noise,
+    i_sig,
+    i_noise,
+    z_sig,
+    z_noise,
+):
+    id_arr = np.array(
+        [str(x).zfill(2) + str(y).zfill(2) for x, y in zip(xs.flatten(), ys.flatten())]
+    ).flatten()
+    df = pd.DataFrame(
+        {
+            "id": id_arr,
+            "z": np.zeros(xs.size),
+            "counts_u": u_sig.flatten(),
+            "err_u": u_noise.flatten(),
+            "counts_g": g_sig.flatten(),
+            "err_g": g_noise.flatten(),
+            "counts_i": i_sig.flatten(),
+            "err_i": i_noise.flatten(),
+            "counts_z": z_sig.flatten(),
+            "err_z": z_noise.flatten(),
+        }
+    )
+    df.to_csv(path_or_buf=outfile, sep=" ", index=False, header=True)
+    print(f"Saved {outfile}")
