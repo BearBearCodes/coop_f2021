@@ -1069,10 +1069,14 @@ def plot_snr(
 def dill_data(
     outfile,
     reproject_method,
+    dist_pc,
+    dist_pc_err,
     x_coords,
     y_coords,
     signal_binned,
     noise_binned,
+    abs_mag,
+    abs_mag_err,
     is_good,
     wcs_binned,
     wcs_binned_array_shape,
@@ -1082,10 +1086,14 @@ def dill_data(
             {
                 "note": "Remember to set `wcs_binned.array_shape = wcs_binned_array_shape`",
                 "reproject_method": reproject_method,
+                "dist_pc": dist_pc,
+                "dist_pc_err": dist_pc_err,
                 "x_coords": x_coords,
                 "y_coords": y_coords,
                 "signal_binned": signal_binned,
                 "noise_binned": noise_binned,
+                "abs_mag": abs_mag,
+                "abs_mag_err": abs_mag_err,
                 "is_good": is_good,
                 "wcs_binned": wcs_binned,
                 "wcs_binned_array_shape": wcs_binned_array_shape,  # this is the "NAXIS" keyword
@@ -1127,3 +1135,156 @@ def txt_data(
     )
     df.to_csv(path_or_buf=outfile, sep=" ", index=False, header=True)
     print(f"Saved {outfile}")
+
+
+def txt_mags(
+    outfile,
+    xs,
+    ys,
+    u_mag,
+    u_mag_err,
+    g_mag,
+    g_mag_err,
+    i_mag,
+    i_mag_err,
+    z_mag,
+    z_mag_err,
+):
+    id_arr = np.array(
+        [str(x).zfill(2) + str(y).zfill(2) for x, y in zip(xs.flatten(), ys.flatten())]
+    )
+    df = pd.DataFrame(
+        {
+            "id": id_arr,
+            "z": np.zeros(xs.size),
+            "u_mag": u_mag.flatten(),
+            "u_mag_err": u_mag_err.flatten(),
+            "g_mag": g_mag.flatten(),
+            "g_mag_err": g_mag_err.flatten(),
+            "i_mag": i_mag.flatten(),
+            "i_mag_err": i_mag_err.flatten(),
+            "z_mag": z_mag.flatten(),
+            "z_mag_err": z_mag_err.flatten(),
+        }
+    )
+    df.to_csv(path_or_buf=outfile, sep=" ", index=False, header=True)
+    print(f"Saved {outfile}")
+
+
+def calc_mag(flux, flux_err=0.0, zpt=30.0, calc_abs=False, dist=None, dist_err=0.0):
+    """
+    Calculates the relative or absolute magnitude of an object given its flux.
+
+    Parameters:
+      flux :: array
+        The flux of the pixel
+      flux_err :: array (optional, default: 0.0)
+        The uncertainty in the flux. Must be able to broadcast with flux array
+      zpt :: scalar
+        The zero point of the magnitude system
+      calc_abs :: bool (optional, default: False)
+        If True, returns the absolute magnitude, otherwise returns the relative magnitude.
+        Requires that dist is also provided.
+      dist :: scalar or array (optional, default: None)
+        The distance to the object/pixel in parsecs. Must be able to broadcast with flux
+        array
+      dist_err :: scalar or array (optional, default: 0.0)
+        The uncertainty in the distance. Must be able to broadcast with flux array
+
+    Returns: mag, mag_err
+      mag :: array
+        The magnitude of the pixel
+      mag_err :: array
+        The uncertainty in the magnitude
+    """
+    rel_mag = -2.5 * np.log10(flux) + zpt
+    rel_mag_err = 2.5 / np.log(10) * abs(flux_err / flux)
+    #
+    if calc_abs:
+        if dist is None:
+            raise ValueError("dist must be provided if calc_abs is True")
+        abs_mag = rel_mag - 5 * (np.log10(dist) - 1)
+        abs_mag_err = np.sqrt(rel_mag_err ** 2 + (5 / np.log(10) * dist_err / dist) ** 2)
+        return abs_mag, abs_mag_err
+    #
+    return rel_mag, rel_mag_err
+
+
+def plot_mags(
+    mag,
+    mag_err,
+    wcs,
+    contour_arr,
+    countour_wcs,
+    contour_levels=[0, 5, 10],
+    vmin=None,
+    vmax=None,
+    band="u-band",
+):
+    fig, ax = plt.subplots(subplot_kw={"projection": wcs})
+    img = ax.imshow(mag, cmap="plasma", vmin=vmin, vmax=vmax)
+    cbar = fig.colorbar(img)
+    cbar.ax.tick_params(which="both", direction="out")
+    cbar.set_label(f"{band} Magnitudes")
+    ax.contour(
+        contour_arr,
+        transform=ax.get_transform(countour_wcs),
+        levels=contour_levels,
+        colors="w",
+    )
+    ax.set_title(f"VCC 792 / NGC 4380: {band} Data Binned")
+    ax.set_xlabel("RA (J2000)")
+    ax.set_ylabel("Dec (J2000)")
+    ax.grid(False)
+    ax.set_aspect("equal")
+    plt.show()
+    #
+    fig, ax = plt.subplots(subplot_kw={"projection": wcs})
+    img = ax.imshow(mag_err, cmap="plasma", vmin=vmin, vmax=vmax)
+    cbar = fig.colorbar(img)
+    cbar.ax.tick_params(which="both", direction="out")
+    cbar.set_label(f"{band} Magnitude Uncertainties")
+    ax.contour(
+        contour_arr,
+        transform=ax.get_transform(countour_wcs),
+        levels=contour_levels,
+        colors="w",
+    )
+    ax.set_title(f"VCC 792 / NGC 4380: {band} Data Binned")
+    ax.set_xlabel("RA (J2000)")
+    ax.set_ylabel("Dec (J2000)")
+    ax.grid(False)
+    ax.set_aspect("equal")
+    plt.show()
+
+
+def calc_pixel_size(imgwcs, dist, dist_err=None):
+    """
+    Calculates the physical size of each pixel in parsecs per pixel dimension.
+
+    Parameters:
+      imgwcs :: `astropy.wcs.wcs.WCS`
+        The WCS coordinates of the .fits file
+      dist :: `astropy.units.quantity.Quantity` scalar
+        The distance to the object
+      dist_err :: `astropy.units.quantity.Quantity` scalar (optional, default: None)
+        The uncertainty in the distance to the object
+
+    Returns: pc_per_px, pc_per_px_err
+      pc_per_px :: some astropy quantity
+        The spatial resolution of the image in parsecs per pixel (along each axis)
+      pc_per_px_err :: some astropy quantity
+        The uncertainty in the spatial resolution of the image (along each axis)
+    """
+    arcsec_per_px = (proj_plane_pixel_scales(imgwcs.celestial) * u.deg).to(u.arcsec)
+    # Still deciding whether to use arctan for the next line
+    arcsec_per_pc = np.rad2deg(1 * u.pc / dist.to(u.pc) * u.rad).to(u.arcsec)
+    pc_per_px = arcsec_per_px / arcsec_per_pc
+    #
+    if dist_err is not None:
+        # arcsec_per_pc_err = np.rad2deg(1 * u.pc / dist_err.to(u.pc) * u.rad).to(u.arcsec)
+        # pc_per_px_err = arcsec_per_px / arcsec_per_pc_err
+        # Uncertainty transforms linearly
+        pc_per_px_err = pc_per_px * dist_err.to(u.pc) / dist.to(u.pc)
+        return pc_per_px, pc_per_px_err
+    return pc_per_px, None
