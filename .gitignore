@@ -131,6 +131,7 @@ dmypy.json
 # Proprietary data
 *.fit
 *.fits
+vertico_data/
 
 # Non-code files
 *.pdf
