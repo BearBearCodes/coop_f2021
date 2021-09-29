@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import dill
 import matplotlib as mpl
+import astropy
 import astropy.units as u
 import astropy.coordinates as coord
 from astropy.io import fits
@@ -1288,3 +1289,43 @@ def calc_pixel_size(imgwcs, dist, dist_err=None):
         pc_per_px_err = pc_per_px * dist_err.to(u.pc) / dist.to(u.pc)
         return pc_per_px, pc_per_px_err
     return pc_per_px, None
+
+
+def lognorm_median(r_data, g_data, b_data, a=1000, norm_factor=1000):
+    """
+    Normalize an image using median values on a (natural) log scale. Requires
+    astropy.visualization.LogStretch().
+
+    The data are scaled using the following formula:
+                y = ln(a * x + 1) / ln(a + 1)
+    where a is a scalar parameter and x are the data to be transformed.
+
+    To create an RGB image, simply pass the returned array to imshow like:
+                ax.imshow(rgb_data, interpolation="none")
+
+    Parameters:
+      r_data :: 2D array or `astropy.io.fits.ImageHDU` object
+        The data of shape (N, M) to be mapped to red
+      g_data :: 2D array or `astropy.io.fits.ImageHDU` object
+        The data of shape (N, M) to be mapped to green
+      b_data :: 2D array or `astropy.io.fits.ImageHDU` object
+        The data of shape (N, M) to be mapped to blue
+      a :: float (optional, default: 1000)
+        The scaling factor for the log transform. Must be greater than 0.
+      norm_factor :: float (optional: default: 1000)
+        The normalization factor for the median
+
+    Returns: rgb_data
+      rgb_data :: 3D array of shape (N, M, 3)
+        The transformed data to be mapped to red (rgb_data[:,:,0]),
+        green (rgb_data[:,:,1]), and blue (rgb_data[:,:,2]).
+    """
+    rgb_data = []
+    for image in (r_data, g_data, b_data):
+        median = np.median(image.data)
+        # Define transformation
+        T = astropy.visualization.LogStretch(a=a)
+        # Normalize by median and apply transformation
+        image = image / median / norm_factor
+        rgb_data.append(T(image))
+    return np.dstack(rgb_data)
