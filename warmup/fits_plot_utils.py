@@ -1077,7 +1077,8 @@ def dill_data(
     signal_binned,
     noise_binned,
     abs_mag,
-    abs_mag_err,
+    abs_mag_err_withDistErr,
+    abs_mag_err_noDistErr,
     is_good,
     wcs_binned,
     wcs_binned_array_shape,
@@ -1094,7 +1095,8 @@ def dill_data(
                 "signal_binned": signal_binned,
                 "noise_binned": noise_binned,
                 "abs_mag": abs_mag,
-                "abs_mag_err": abs_mag_err,
+                "abs_mag_err_withDistErr": abs_mag_err_withDistErr,
+                "abs_mag_err_noDistErr": abs_mag_err_noDistErr,
                 "is_good": is_good,
                 "wcs_binned": wcs_binned,
                 "wcs_binned_array_shape": wcs_binned_array_shape,  # this is the "NAXIS" keyword
@@ -1104,7 +1106,7 @@ def dill_data(
     print(f"Pickled {outfile}")
 
 
-def txt_data(
+def txt_snr(
     outfile,
     xs,
     ys,
@@ -1181,7 +1183,7 @@ def calc_mag(flux, flux_err=0.0, zpt=30.0, calc_abs=False, dist=None, dist_err=0
         The flux of the pixel
       flux_err :: array (optional, default: 0.0)
         The uncertainty in the flux. Must be able to broadcast with flux array
-      zpt :: scalar
+      zpt :: float (optional, default: 30.0)
         The zero point of the magnitude system
       calc_abs :: bool (optional, default: False)
         If True, returns the absolute magnitude, otherwise returns the relative magnitude.
@@ -1189,7 +1191,7 @@ def calc_mag(flux, flux_err=0.0, zpt=30.0, calc_abs=False, dist=None, dist_err=0
       dist :: scalar or array (optional, default: None)
         The distance to the object/pixel in parsecs. Must be able to broadcast with flux
         array
-      dist_err :: scalar or array (optional, default: 0.0)
+      dist_err :: float or array (optional, default: 0.0)
         The uncertainty in the distance. Must be able to broadcast with flux array
 
     Returns: mag, mag_err
