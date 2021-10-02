@@ -560,6 +560,42 @@ def cutout(data, center, shape, wcs=None, header=None, mode="trim"):
     return data_cut, wcs_cut
 
 
+def cutout_to_target(input_arr, input_wcs, target_arr, target_wcs, mode="trim"):
+    """
+    Uses Cutout2D to cut out a subsction of input_arr to the extent of target_arr
+    (provided via the target_wcs). The extent of the target_arr should be wholly contained
+    inside the extent of input_arr.
+
+    Parameters:
+      input_arr :: 2D array
+        The array from which the cutout will be extracted
+      input_wcs :: `astropy.wcs.WCS`
+        The WCS of the input_arr
+      target_arr :: 2D array
+        The array whose extent you want to copy
+      target_wcs :: `astropy.wcs.WCS`
+        The WCS of the target_arr
+
+    Returns: input_arr_cut, input_wcs_cut
+      input_data_cut :: 2D array
+        The array cut out from the original input_arr
+      input_wcs_cut :: `astropy.wcs.WCS` or None
+        The updated WCS for the cutout array
+    """
+    target_bottomleft = target_wcs.pixel_to_world(0, 0)
+    target_topright = target_wcs.pixel_to_world(*target_arr.shape)
+    # ? Don't know if I am passing the arguments in the right order.
+    target_centre = target_wcs.pixel_to_world(
+        target_arr.shape[1] / 2, target_arr.shape[0] / 2
+    )
+    # Map the pixels above to their corresponding pixels in the input array
+    input_bottomleft = input_wcs.world_to_pixel(target_bottomleft)
+    input_topright = input_wcs.world_to_pixel(target_topright)
+    # Determine shape of cutout in input array
+    cutout_shape = abs(np.subtract(input_topright, input_bottomleft))
+    return cutout(input_arr, target_centre, cutout_shape, wcs=input_wcs, mode=mode)
+
+
 def line_profile(data, start, end, wcs=None):
     """
     Returns the profile of some 2D data along a line specified by the start and end
