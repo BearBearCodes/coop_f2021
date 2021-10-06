@@ -1367,3 +1367,21 @@ def lognorm_median(r_data, g_data, b_data, a=1000, norm_factor=1000):
         image = image / median / norm_factor
         rgb_data.append(T(image))
     return np.dstack(rgb_data)
+
+
+def calc_snr(signal, noise, func=np.nansum):
+    """
+    Calculates the overall signal-to-noise ratio of the input arrays.
+    
+    TODO: finish docstring
+    
+    Returns: snr, bin_signal, bin_noise
+      snr :: float
+        The total signal-to-noise ratio of the input data
+    """
+    bin_signal = func(signal)
+    # Add noise in quadrature
+    bin_noise = noise * noise
+    bin_noise = func(bin_noise)
+    bin_noise = np.sqrt(bin_noise)
+    return bin_signal / bin_noise, bin_signal, bin_noise
