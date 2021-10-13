@@ -132,7 +132,7 @@ dmypy.json
 *.fit
 *.fits
 vertico_data/
-sed_fits/*.txt
+sed_fits/
 
 # Non-code files
 *.pdf
