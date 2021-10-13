@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import dill
 import matplotlib as mpl
+import seaborn as sns
 import astropy
 import astropy.units as u
 import astropy.coordinates as coord
@@ -1155,8 +1156,12 @@ def txt_snr(
     z_sig,
     z_noise,
 ):
+    len_digits = len(str(np.max((np.max(xs), np.max(ys)))))
     id_arr = np.array(
-        [str(x).zfill(2) + str(y).zfill(2) for x, y in zip(xs.flatten(), ys.flatten())]
+        [
+            str(x).zfill(len_digits) + str(y).zfill(len_digits)
+            for x, y in zip(xs.flatten(), ys.flatten())
+        ]
     )
     df = pd.DataFrame(
         {
@@ -1189,8 +1194,12 @@ def txt_mags(
     z_mag,
     z_mag_err,
 ):
+    len_digits = len(str(np.max((np.max(xs), np.max(ys)))))
     id_arr = np.array(
-        [str(x).zfill(2) + str(y).zfill(2) for x, y in zip(xs.flatten(), ys.flatten())]
+        [
+            str(x).zfill(len_digits) + str(y).zfill(len_digits)
+            for x, y in zip(xs.flatten(), ys.flatten())
+        ]
     )
     df = pd.DataFrame(
         {
@@ -1372,9 +1381,9 @@ def lognorm_median(r_data, g_data, b_data, a=1000, norm_factor=1000):
 def calc_snr(signal, noise, func=np.nansum):
     """
     Calculates the overall signal-to-noise ratio of the input arrays.
-    
+
     TODO: finish docstring
-    
+
     Returns: snr, bin_signal, bin_noise
       snr :: float
         The total signal-to-noise ratio of the input data
@@ -1385,3 +1394,144 @@ def calc_snr(signal, noise, func=np.nansum):
     bin_noise = func(bin_noise)
     bin_noise = np.sqrt(bin_noise)
     return bin_signal / bin_noise, bin_signal, bin_noise
+
+
+def joint_contour_plot(
+    xdata,
+    ydata,
+    plot_lts=True,
+    lts_slope=None,
+    lts_yint=None,
+    lts_pivot=None,
+    lts_rms=None,
+    lts_clip=None,
+    lts_xlim=None,
+    lts_color=sns.color_palette("colorblind")[5],
+    fig_xlim=None,
+    fig_ylim=None,
+    fig_xlabel=None,
+    fig_ylabel=None,
+    fig_suptitle=None,
+    fig_savename=None,
+    contour_cmap=sns.color_palette("ch:start=0.5, rot=-0.5", as_cmap=True),
+    margin_color="#66c2a5",
+    margin_bins=100,
+    plot_scatter=False,
+    scatter_kwargs=None,
+):
+    """
+    Creates a joint contour plot of the data with marginal plots showing the histogram and
+    KDE of each axis' data. Optionally plots a line showing the LTS fit and/or a scatter
+    plot superimposed over the contours.
+
+    Parameters:
+      xdata, ydata :: 1D array
+        The x- and y-axis data.
+      plot_lts :: bool (optional, default: True)
+        If True, plots the LTS best-fit line and requires at least the lts_slope,
+        lts_yint, and lts_pivot. If False, do not plot the LTS line.
+      lts_slope, lts_yint, lts_pivot :: float (optional)
+        The slope, y-intercept, and pivot of the LTS best-fit line. Required if plot_lts
+        is True.
+      lts_rms, lts_clip :: float (optional)
+        The RMS uncertainty and clipping value of the LTS fit.
+      lts_xlim :: 2-tuple of floats (optional)
+        The x-axis limits of the LTS fit line. If None, lts_xlim uses the min & max of the
+        xdata.
+      lts_color :: str (optional)
+        The color of the LTS-fitted line(s).
+      fig_xlim, fig_ylim :: 2-tuple of floats or dict of kwargs (optional)
+        The x- and y-axis limits of the plot. If None, fig_xlim and fig_ylim use the
+        default values determined by matplotlib
+      fig_xlabel, fig_ylabel :: str (optional)
+        The x- and y-axis labels
+      fig_suptitle :: str (optional)
+        The suptitle of the joint plot
+      fig_savename :: str (optional)
+        If not None, saves the figure to the directory/filename specified by fig_savename.
+      contour_cmap :: str or `matplotlib.colors.ListedColormap` object (optional)
+        The colour map to use for the contour plot.
+      margin_color :: str (optional)
+        The colour to use for the marginal plots' histograms and KDEs.
+      margin_bins :: int (optional)
+        The number of bins to use for the marginal plots' histograms.
+      plot_scatter :: bool (optional)
+        If True, plots a scatter plot of the data without errorbars.
+      scatter_kwargs :: dict (optional)
+        The keyword arguments to pass to the scatter plot. If None, sets the marker style
+        to points ("."), marker size to 4, and marker colour to black.
+
+    Returns: None
+    """
+    grid = mpl.gridspec.GridSpec(2, 2, width_ratios=[3, 1], height_ratios=[1, 4])
+    fig = plt.figure()
+    #
+    # Primary plot
+    #
+    ax = plt.subplot(grid[1, 0])
+    # Plot KDE contours
+    sns.kdeplot(
+        ax=ax, x=xdata, y=ydata, cmap=contour_cmap, fill=True,
+    )
+    # Plot LTS line (slope, yint, rms, clip, and pivot from LTS fit)
+    if plot_lts:
+        if lts_xlim is not None:
+            xvals = np.linspace(*lts_xlim, 100)
+        else:
+            xvals = np.linspace(np.min(xdata), np.max(xdata), 100)
+        if lts_slope is not None and lts_yint is not None and lts_pivot is not None:
+            # Plot best-fit line
+            linevals = lts_slope * (xvals - lts_pivot) + lts_yint
+            ax.plot(xvals, linevals, color=lts_color)
+        else:
+            raise ValueError("LTS slope and y-int must be provided")
+        if lts_rms is not None:
+            # Plot lines enclosing 68% of data
+            ax.plot(xvals, linevals - lts_rms, color=lts_color, ls="--")
+            ax.plot(xvals, linevals + lts_rms, color=lts_color, ls="--")
+            if lts_clip is not None:
+                # If lts_clip = 2.6 sigma, lines enclose 99% of data
+                ax.plot(xvals, linevals - lts_clip * lts_rms, color=lts_color, ls=":")
+                ax.plot(xvals, linevals + lts_clip * lts_rms, color=lts_color, ls=":")
+    # Plot scatter plot
+    if plot_scatter:
+        if scatter_kwargs is None:
+            scatter_kwargs = {"c": "k", "s": 4, "marker": "."}
+        ax.scatter(xdata, ydata, **scatter_kwargs)
+    if isinstance(fig_xlim, tuple):
+        ax.set_xlim(*fig_xlim)
+    elif isinstance(fig_xlim, dict):
+        ax.set_xlim(**fig_xlim)
+    if isinstance(fig_ylim, tuple):
+        ax.set_ylim(*fig_ylim)
+    elif isinstance(fig_ylim, dict):
+        ax.set_ylim(**fig_ylim)
+    ax.set_xlabel(fig_xlabel) if fig_xlabel is not None else None
+    ax.set_ylabel(fig_ylabel) if fig_ylabel is not None else None
+    ax.grid(True)
+    #
+    # Right marginal plot
+    #
+    ax_r = plt.subplot(grid[1, 1], frameon=False, sharey=ax, xticks=[])
+    ax_r.hist(ydata, bins=margin_bins, orientation="horizontal", density=True)
+    sns.kdeplot(y=ydata, ax=ax_r, fill=False, color=margin_color)
+    ax_r.yaxis.set_ticks_position("none")
+    plt.setp(ax_r.get_yticklabels(), visible=False)
+    ax_r.grid(False)
+    #
+    # Top marginal plot
+    #
+    ax_t = plt.subplot(grid[0, 0], frameon=False, sharex=ax, yticks=[])
+    ax_t.hist(xdata, bins=margin_bins, orientation="vertical", density=True)
+    sns.kdeplot(x=xdata, ax=ax_t, fill=False, color=margin_color)
+    ax_t.xaxis.set_ticks_position("none")
+    plt.setp(ax_t.get_xticklabels(), visible=False)
+    ax_t.grid(False)
+    #
+    # Other plot params
+    #
+    fig.suptitle(fig_suptitle) if fig_suptitle is not None else None
+    fig.tight_layout()
+    plt.subplots_adjust(wspace=2e-3, hspace=4e-3)
+    fig.savefig(fig_savename, bbox_inches="tight") if fig_savename is not None else None
+    plt.show()
