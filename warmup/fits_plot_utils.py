@@ -1396,6 +1396,96 @@ def calc_snr(signal, noise, func=np.nansum):
     return bin_signal / bin_noise, bin_signal, bin_noise
 
 
+# def load_sed_results(
+#     path,
+#     xmax,
+#     ymax,
+#     outfile=None,
+#     xmin=0,
+#     ymin=0,
+#     infile="prospectorFit_emcee_<NUMS>_results.txt",
+#     replace="<NUMS>",
+# ):
+#     """
+#     Takes the individual .txt files containing the SED fitting results and compiles the
+#     data into an array. Optionally outputs a .txt file containing the amalgamated results
+#     (not implemented yet).
+#     """
+#     # Check directory and filename
+#     if path[-1] != "/":
+#         path += "/"
+#     if infile[-4:] != ".txt":
+#         raise ValueError("infile must be a .txt file.")
+#     #
+#     start_idx = infile.index(replace)
+#     end_idx = start_idx + len(replace)
+#     pre_str = infile[:start_idx]
+#     post_str = infile[end_idx:]
+#     len_digits = len(str(np.max((np.max(xmax), np.max(ymax)))))
+#     results = []
+#     for y in range(ymin, ymax + 1):
+#         for x in range(xmin, xmax + 1):
+#             results.append(
+#                 np.loadtxt(
+#                     path
+#                     + pre_str
+#                     + str(x).zfill(len_digits)
+#                     + str(y).zfill(len_digits)
+#                     + post_str
+#                 )
+#             )
+#     results = np.vstack(results)
+#     return results
+
+
+def load_sed_results(
+    path,
+    nmax,
+    nmin=0,
+    infile="prospectorFit_emcee_<NUMS>_results.txt",
+    replace="<NUMS>",
+    skip=None,
+):
+    """
+    Takes the individual .txt files containing the SED fitting results and compiles the
+    data into an array. Optionally outputs a .txt file containing the amalgamated results
+    (not implemented yet). N.B. nmax is inclusive. Assumes the shape of each file is the
+    same.
+
+    TODO: finish docstring
+
+    Parameters:
+      skip :: array-like of ints (optional)
+        The files to skip and assign to NaN.
+    """
+    # Check directory and filename
+    if path[-1] != "/":
+        path += "/"
+    if infile[-4:] != ".txt":
+        raise ValueError("infile must be a .txt file.")
+    #
+    start_idx = infile.index(replace)
+    end_idx = start_idx + len(replace)
+    pre_str = infile[:start_idx]
+    post_str = infile[end_idx:]
+    len_digits = len(str(nmax))
+    results = []
+    if skip is None:
+        skip = []
+    for i in range(nmin, nmax + 1):
+        if i in skip:
+            if i > nmin:
+                results.append(np.zeros_like(results[-1]) * np.nan)
+            else:
+                raise ValueError("skip must be greater than nmin.")
+        else:
+            results.append(
+                np.loadtxt(path + pre_str + str(i).zfill(len_digits) + post_str)
+            )
+    results = np.vstack(results)
+    return results
+
+
 def joint_contour_plot(
     xdata,
     ydata,
