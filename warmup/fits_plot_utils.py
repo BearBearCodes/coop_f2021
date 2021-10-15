@@ -26,6 +26,7 @@ from astropy.wcs.utils import proj_plane_pixel_scales, skycoord_to_pixel
 import reproject
 import copy
 import warnings
+from radio_beam import Beam
 
 #
 # Colour bars with custom midpoints. NOT MY CODE. See docstrings
@@ -1319,9 +1320,9 @@ def calc_pixel_size(imgwcs, dist, dist_err=None):
         The uncertainty in the distance to the object
 
     Returns: pc_per_px, pc_per_px_err
-      pc_per_px :: some astropy quantity
+      pc_per_px :: 1D array
         The spatial resolution of the image in parsecs per pixel (along each axis)
-      pc_per_px_err :: some astropy quantity
+      pc_per_px_err :: 1D array or None
         The uncertainty in the spatial resolution of the image (along each axis)
     """
     arcsec_per_px = (proj_plane_pixel_scales(imgwcs.celestial) * u.deg).to(u.arcsec)
@@ -1334,8 +1335,8 @@ def calc_pixel_size(imgwcs, dist, dist_err=None):
         # pc_per_px_err = arcsec_per_px / arcsec_per_pc_err
         # Uncertainty transforms linearly
         pc_per_px_err = pc_per_px * dist_err.to(u.pc) / dist.to(u.pc)
-        return pc_per_px, pc_per_px_err
-    return pc_per_px, None
+        return pc_per_px.value, pc_per_px_err.value
+    return pc_per_px.value, None
 
 
 def lognorm_median(r_data, g_data, b_data, a=1000, norm_factor=1000):
@@ -1517,7 +1518,7 @@ def joint_contour_plot(
     Parameters:
       xdata, ydata :: 1D array
         The x- and y-axis data.
-      plot_lts :: bool (optional, default: True)
+      plot_lts :: bool (optional)
         If True, plots the LTS best-fit line and requires at least the lts_slope,
         lts_yint, and lts_pivot. If False, do not plot the LTS line.
       lts_slope, lts_yint, lts_pivot :: float (optional)
@@ -1625,3 +1626,19 @@ def joint_contour_plot(
     plt.subplots_adjust(wspace=2e-3, hspace=4e-3)
     fig.savefig(fig_savename, bbox_inches="tight") if fig_savename is not None else None
     plt.show()
+
+
+def get_beam_size(header):
+    """
+    Assumes pixel is square.
+
+    TODO: finish docstring
+    """
+    beam = Beam.from_fits_header(header)
+    # Assume square pixels
+    deg_per_px = proj_plane_pixel_scales(WCS(header).celestial)[0] * u.deg
+    #
+    beam_major = (beam.major.to(u.deg) / deg_per_px).to(u.dimensionless_unscaled).value
+    beam_minor = (beam.minor.to(u.deg) / deg_per_px).to(u.dimensionless_unscaled).value
+    beam_pa = (beam.pa + 90.0 * u.deg).to(u.deg).value  # PA starts at N and increases CCW
+    return beam_major, beam_minor, beam_pa
