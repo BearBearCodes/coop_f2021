@@ -5,28 +5,28 @@ Utilities for generating plots (e.g., imshow, contour, contourf) from FITS files
 Originally developed for NGVS and VERTICO data processing.
 
 Isaac Cheng - September 2021
-
-TODO: maybe add a function to generate RGB images?
 """
 
-import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import dill
-import matplotlib as mpl
-import seaborn as sns
-import astropy
-import astropy.units as u
-import astropy.coordinates as coord
-from astropy.io import fits
-from astropy.wcs import WCS
-from astropy.nddata import Cutout2D, block_reduce
-from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
-from astropy.wcs.utils import proj_plane_pixel_scales, skycoord_to_pixel
-import reproject
 import copy
 import warnings
+
+import astropy
+import astropy.coordinates as coord
+import astropy.units as u
+import dill
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import reproject
+import seaborn as sns
+from astropy.io import fits
+from astropy.nddata import Cutout2D, block_reduce
+from astropy.wcs import WCS
+from astropy.wcs.utils import proj_plane_pixel_scales, skycoord_to_pixel
+from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 from radio_beam import Beam
+
 
 #
 # Colour bars with custom midpoints. NOT MY CODE. See docstrings
