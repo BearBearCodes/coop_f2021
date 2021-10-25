@@ -14,9 +14,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.wcs import WCS
 from astropy.wcs.utils import proj_plane_pixel_scales
-from photutils.aperture import BoundingBox, EllipticalAnnulus, EllipticalAperture
+from photutils.aperture import (BoundingBox, EllipticalAnnulus,
+                                EllipticalAperture, RectangularAperture)
 from radio_beam import Beam
 
+# TODO: add support for highly inclined galaxies (beyond i_threshold)
 # TODO: make a function to find the ellipse enclosing x% of the data
 
 
@@ -89,7 +91,7 @@ def calc_radius(a_in, a_out, b_in, b_out):
     return 0.5 * (inner_circularized_radius + outer_circularized_radius)
 
 
-def correct_for_i(data, i, const=None, i_threshold=None, i_replacement=None):
+def correct_for_i(data, i, i_threshold=None, i_replacement=None):
     """
     Corrects for the inclination(s) of the galaxy/galaxies. Typically used if the data or
     their precursors are affected by optically thick properties of the galaxy (e.g.,
@@ -106,8 +108,6 @@ def correct_for_i(data, i, const=None, i_threshold=None, i_replacement=None):
       i :: scalar or array of scalars
         The inclination(s) of the galaxy/galaxies in degrees. Must be able to broadcast
         with data
-      const :: scalar or array of scalars
-        The constant(s) to be multiplied to the data. Must be able to broadcast with data
       i_threshold :: scalar or array of scalars
         If i >= i_threshold, that value of i is replaced with i_replacement. Must be able
         to broadcast with i
@@ -121,14 +121,13 @@ def correct_for_i(data, i, const=None, i_threshold=None, i_replacement=None):
     data, i = np.asarray(data), np.asarray(i)
     if i_threshold is not None:
         if i_replacement is None:
-            raise ValueError("replacement must be provided if threshold is specified")
+            raise ValueError("i_replacement must be provided if i_threshold is specified")
         i_threshold, i_replacement = np.asarray(i_threshold), np.asarray(i_replacement)
         i = np.where(i < i_threshold, i, i_replacement)
-    const = 1.0 if const is None else const
-    return data * np.cos(np.deg2rad(i)) * const
+    return data * np.cos(np.deg2rad(i))
 
 
-def get_beam_size(header):
+def get_beam_size_px(header):
     """
     Calculates the size of a radio beam in pixel units and its orientation (position
     angle) in degrees. Assumes pixels are square.
@@ -211,7 +210,52 @@ def bootstrap(
     return bootstraps
 
 
-def create_mask(
+def mask_bad(signal, include_bad, noise=None, bad_fill_value=0.0):
+    """
+    Masks the signal (and optionally noise) array according to include_bad condition. If
+    include_bad is True, replace infs and NaNs with bad_fill_value. If include_bad is
+    False, replace infs and NaNs with NaNs (regardless of bad_fill_value).
+
+    If noise is provided, masking will occur where signal OR noise is inf or NaN.
+
+    Parameters:
+      signal :: array-like
+        The signal array to be masked
+      include_bad :: bool
+        Whether to mask infs and NaNs with zeros or infs
+      noise :: array-like (optional)
+        The noise array to be masked. Must have the same shape as signal array
+      bad_fill_value :: float (optional)
+        The value used to replace infs and NaNs if include_bad is True. Ignored if
+        include_bad is False
+
+    Returns: signal_masked, noise_masked
+      masked_signal :: array
+        The masked signal array
+      masked_noise :: array or None
+        If noise is not None, this is the masked noise array. Otherwise, this is None
+    """
+    # Check inputs
+    if not include_bad:
+        bad_fill_value = np.nan  # replace bad values with NaNs
+    signal = np.asarray(signal)
+    if noise is not None:
+        if np.shape(noise) != np.shape(signal):
+            raise ValueError("signal and noise arrays must have the same shape!")
+        noise = np.asarray(noise)
+        mask = (~np.isfinite(signal)) | (~np.isfinite(noise))
+    else:
+        mask = ~np.isfinite(signal)
+    # Set non-detections and bad pixels to bad_fill_value or NaN
+    masked_signal = np.ma.masked_array(signal, mask=mask).filled(bad_fill_value)
+    if noise is not None:
+        masked_noise = np.ma.masked_array(noise, mask=mask).filled(bad_fill_value)
+    else:
+        masked_noise = None
+    return masked_signal, masked_noise
+
+
+def create_aper_mask(
     arr, aper, include_bad=True, method="exact", plot=False, plot_title="Mask"
 ):
     """
@@ -291,9 +335,10 @@ def calc_avg_sn_aperture(
     **bootstrap_errs_kwargs,
 ):
     """
-    Calculates average signal (and optionally noise) of data enclosed in an annulus,
-    ellipse, or some other aperture shape supported by `photutils.aperture.PixelAperture`.
-    Only works with one aperture per function call.
+    Calculates the average (i.e., mean or median) and the standard deviation of the signal
+    (and optionally noise) enclosed in an annulus, ellipse, or some other aperture shape
+    supported by `photutils.aperture.PixelAperture`. Only works with one aperture per
+    function call (see calc_avg_sn_aperture_multi() below).
 
     If the extent of the aperture is larger than the signal or noise arrays, this function
     will automatically pad relevant arrays to ensure the mean/median is calculated
@@ -326,7 +371,7 @@ def calc_avg_sn_aperture(
         _n_samples, _seed). Only relevant if bootstrap_errs is True. If bootstrapping is
         taking too long, consider decreasing _n_bootstraps and/or _n_samples
 
-    Returns: tot_signal, tot_noise
+    Returns: avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise
       avg_signal :: float
         The average (either median or arithmetic mean) signal of the data in the aperture
       avg_noise :: float or None
@@ -340,6 +385,15 @@ def calc_avg_sn_aperture(
         avg_signal and avg_noise estimated by bootstrapping. If bootstrap_errs==False,
         these values are None. If noise is None, avg_noise_err is None (regardless of
         bootstrap_errs)
+      std_signal :: float
+        The standard deviation of the signal contained in the aperture. N.B. if there are
+        many "bad" points in the aperture (i.e., NaNs or infs) and include_bad is True,
+        then this may not be an accurate representation of the standard deviation
+      std_noise :: float or None
+        If noise is not None, this is the standard deviation of the noise contained in
+        the aperture. N.B. if there are many "bad" points in the aperture (i.e., NaNs or
+        infs) and include_bad is True, then this may not be an accurate representation of
+        the standard deviation. If noise is None, this is None
     """
 
     def _debug_plot(_arr, title=None):
@@ -396,25 +450,26 @@ def calc_avg_sn_aperture(
     #
     # Check inputs and create array mask
     #
+    # mask, fill_value = _make_input_mask(signal, aper, noise, include_bad)
     if aper.positions[0] > signal.shape[0] or aper.positions[1] > signal.shape[1]:
         print("WARNING: Centre of aperture is not within extent of signal array!")
     fill_value = 0.0 if include_bad else np.nan
-    if noise is not None:
-        if np.shape(noise) != np.shape(signal):
-            raise ValueError("signal and noise arrays must have the same shape!")
-        mask = (~np.isfinite(signal)) | (~np.isfinite(noise))
-    else:
-        mask = ~np.isfinite(signal)
-    #
-    # Set non-detections and bad pixels to zero or NaN
-    #
-    signal = np.ma.masked_array(signal, mask=mask).filled(fill_value)
-    if noise is not None:
-        noise = np.ma.masked_array(noise, mask=mask).filled(fill_value)
+    # if noise is not None:
+    #     if np.shape(noise) != np.shape(signal):
+    #         raise ValueError("signal and noise arrays must have the same shape!")
+    #     mask = (~np.isfinite(signal)) | (~np.isfinite(noise))
+    # else:
+    #     mask = ~np.isfinite(signal)
+    # #
+    # #
+    # signal = np.ma.masked_array(signal, mask=mask).filled(fill_value)
+    # if noise is not None:
+    #     noise = np.ma.masked_array(noise, mask=mask).filled(fill_value)
+    signal, noise = mask_bad(signal, include_bad, noise=noise, bad_fill_value=fill_value)
     #
     # Create aperture masks and pad arrays if necessary
     #
-    aper_mask_signal, padded_signal = create_mask(
+    aper_mask_signal, padded_signal = create_aper_mask(
         signal,
         aper,
         include_bad=include_bad,
@@ -423,7 +478,7 @@ def calc_avg_sn_aperture(
         plot_title="Signal Mask",
     )
     if noise is not None:
-        aper_mask_noise, padded_noise = create_mask(
+        aper_mask_noise, padded_noise = create_aper_mask(
             noise,
             aper,
             include_bad=include_bad,
@@ -449,7 +504,7 @@ def calc_avg_sn_aperture(
             avg_noise = func(masked_noise)
     elif func == "mean":
         func = np.nansum
-        # Straight arithmetic sum divided by area
+        # Straight arithmetic sum divided by area (incl. edge effects)
         avg_signal = func(masked_signal)
         signal_area = np.copy(masked_signal)
         signal_area[~np.isnan(signal_area)] = 1.0
@@ -458,7 +513,7 @@ def calc_avg_sn_aperture(
         if plot:
             _debug_plot(signal_area, title="Dividing signal by this area")
         if noise is not None:
-            # Add noise in quadrature then divide by area
+            # Add noise in quadrature then divide by area (incl. edge effects)
             avg_noise = func(masked_noise * padded_noise)
             noise_area = np.copy(masked_noise)
             noise_area[~np.isnan(noise_area)] = 1.0
@@ -497,7 +552,12 @@ def calc_avg_sn_aperture(
                 _area=noise_area,
                 **bootstrap_errs_kwargs,
             )
-    return avg_signal, avg_noise, avg_signal_err, avg_noise_err
+    #
+    # Standard deviation of data in aperture
+    #
+    std_signal = np.nanstd(masked_signal)
+    std_noise = np.nanstd(masked_noise) if noise is not None else None
+    return avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise
 
 
 def calc_avg_sn_aperture_multi(signal, apers, noise=None, **kwargs):
@@ -517,7 +577,7 @@ def calc_avg_sn_aperture_multi(signal, apers, noise=None, **kwargs):
         Keyword arguments to be passed to calc_avg_sn_aperture() (i.e., include_bad, func,
         method, plot, bootstrap_errs, _n_bootstraps, _n_samples, _seed)
 
-    Returns: avg_signal, avg_noise, avg_signal_err, avg_noise_err
+    Returns: avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise
       avg_signal :: 1D array
         The apertures' signal averages (either median or arithmetic mean)
       avg_noise :: 1D array or None
@@ -532,23 +592,41 @@ def calc_avg_sn_aperture_multi(signal, apers, noise=None, **kwargs):
         avg_signal and avg_noise estimated by bootstrapping. If bootstrap_errs==False,
         these values are None. If noise is None, avg_noise_err is None (regardless of
         bootstrap_errs)
+      std_signal :: 1D array
+        The standard deviations of the data contained in each aperture. N.B. if there are
+        many "bad" points in an aperture (i.e., NaNs or infs) and include_bad is True,
+        then this may not be an accurate representation of the standard deviation for that
+        given aperture + data combination
+      std_noise :: 1D array or None
+        If noise is not None, this is a 1D array containing the standard deviations of the
+        noise
     """
     avg_signal, avg_noise, avg_signal_err, avg_noise_err = [], [], [], []
-    for i, aper in enumerate(apers):
-        aper_signal, aper_noise, aper_signal_err, aper_noise_err = calc_avg_sn_aperture(
-            signal, aper, noise, **kwargs
-        )
+    std_signal, std_noise = [], []
+    for aper in apers:
+        (
+            aper_signal,
+            aper_noise,
+            aper_signal_err,
+            aper_noise_err,
+            aper_signal_std,
+            aper_noise_std,
+        ) = calc_avg_sn_aperture(signal, aper, noise, **kwargs)
         avg_signal.append(aper_signal)
         avg_noise.append(aper_noise)
         avg_signal_err.append(aper_signal_err)
         avg_noise_err.append(aper_noise_err)
+        std_signal.append(aper_signal_std)
+        std_noise.append(aper_noise_std)
     avg_signal, avg_noise = np.asarray(avg_signal), np.asarray(avg_noise)
     avg_signal_err, avg_noise_err = np.asarray(avg_signal_err), np.asarray(avg_noise_err)
+    std_signal, std_noise = np.asarray(std_signal), np.asarray(std_noise)
     # In this case, last element is None <=> any element is None <=> all elements are None
     avg_noise = None if avg_noise[-1] is None else avg_noise
     avg_signal_err = None if avg_signal_err[-1] is None else avg_signal_err
     avg_noise_err = None if avg_noise_err[-1] is None else avg_noise_err
-    return avg_signal, avg_noise, avg_signal_err, avg_noise_err
+    std_noise = None if std_noise[-1] is None else std_noise
+    return avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise
 
 
 def fit_annuli(
@@ -557,6 +635,7 @@ def fit_annuli(
     pa,
     min_width,
     min_width_ax="minor",
+    i_threshold=None,
     wcs=None,
     n_annuli=None,
     snr_cutoff=None,
@@ -590,16 +669,33 @@ def fit_annuli(
         The position angle of all ellipses/annuli. The position angle is defined as the
         angle starting from north and increasing toward the east counter-clockwise
       min_width :: float
-        The minimum width and separation of all ellipses/annuli in pixels. This width will
-        be the length of the semi-minor or semi-major axis of an ellipse or the minimum
-        distance between the inner & outer rings of an annulus along the semi-major/minor
-        axes. Typically, this is the beam size of a radio telescope or the worst (largest)
-        PSF of an optical image
+        The minimum width and separation of all ellipses/annuli. If a float, min_width
+        should be in pixel units. If an astropy Quantity, the header or wcs must also be
+        provided. This width will be the minimum length of the semi-major/minor axis of an
+        ellipse or the minimum distance between the inner & outer rings of an annulus
+        along the semi-major/minor axes. For example, this is typically the beam size of
+        the radio telescope or the size of the worst (largest) PSF of an optical
+        telescope.
+        If min_width not provided, the FITS header must be provided instead
       min_width_ax :: "minor" or "major" (optional)
         The axis along which the minimum width is defined. If "minor", min_width is the
         minimum width and separation of any ellipse/annulus along the minor axis. If
         "major", min_width is the minimum width and separation of any ellipse/annulus
         along the major axis
+      i_threshold :: float (optional)
+        TODO: implement this
+        If i >= i_threshold, use squares/rectangles that have a thickness of min_width
+        (e.g., the radio beam width) aligned with the major axis instead of
+        ellipses/elliptical annuli. The initial square will be centred on the galactic
+        centre (provided via the center parameter). The next "rectangle" region will be
+        composed of two squares appended on the sides of the initial square along the
+        major axis defined by the position angle. In other words, the heights of all the
+        rectangles will be min_width and the widths will be 1, 3, 5, ... times min_width.
+        N.B. for widths greater than 1 min_width, only the outer 2 squares will be used
+        for the average calculation. Lastly, n_annuli = max number of rectangles (e.g.,
+        n_annuli=3 => rectangles of widths 1, 3, 5), a_in & b_in are both zero, and a_out
+        & b_out are the widths and heights of the rectangles.
+        ! FIXME: This is super poorly explained.
       wcs :: `astropy.wcs.WCS` object (optional)
         The WCS object corresponding to the center parameter (and optionally the
         data/noise arrays). Required if center is a SkyCoord object; ignored otherwise
@@ -665,6 +761,10 @@ def fit_annuli(
         center = wcs.world_to_pixel(center)
     if min_width_ax != "minor" and min_width_ax != "major":
         raise ValueError("min_width_ax must be either 'major' or 'minor'")
+    if i_threshold is not None:
+        # if i_threshold < 0 or ~np.isfinite(i_threshold):
+        #     raise ValueError("i_threshold must be a finite number >= 0")
+        raise ValueError("i_threshold is not implemented yet")
     #
     # Calculate basic quantities
     #
@@ -698,9 +798,13 @@ def fit_annuli(
                     "WARNING: bootstrapping errors in fit_annuli() will unnecessarily "
                     + "slow down the program!"
                 )
+        print(
+            "Info: Fitting annuli according to snr_cutoff. Warning messages (e.g., "
+            + "invalid values, degrees of freedom <= 0, etc.) can safely be ignored"
+        )
         num = 0
         _append_annulus(num)
-        avg_data, avg_noise, _, _ = calc_avg_sn_aperture(
+        avg_data, avg_noise, _, _, _, _ = calc_avg_sn_aperture(
             data, annuli[-1], noise=noise, **kwargs
         )
         avg_snr = avg_data / avg_noise
@@ -714,7 +818,7 @@ def fit_annuli(
             avg_snr_old = avg_snr
             num += 1
             _append_annulus(num)
-            avg_data, avg_noise, _, _ = calc_avg_sn_aperture(
+            avg_data, avg_noise, _, _, _, _ = calc_avg_sn_aperture(
                 data, annuli[-1], noise=noise, **kwargs
             )
             avg_snr = avg_data / avg_noise
@@ -733,12 +837,13 @@ def fit_annuli(
     return annuli, a_ins, a_outs, b_ins, b_outs
 
 
-def radial_profile(
+def calc_radial_profile(
     data,
     center,
     i,
     pa,
     noise=None,
+    i_threshold=None,
     n_annuli=None,
     snr_cutoff=None,
     max_snr_annuli=50,
@@ -750,9 +855,9 @@ def radial_profile(
     method="exact",
     func="median",
     debug_plot=False,
-    tele_type="radio",
-    optical_hdr_min_width_key="IQMAX",
-    optical_hdr_min_width_unit=u.arcsec,
+    is_radio=True,
+    header_min_width_key="IQMAX",
+    header_min_width_unit=u.arcsec,
     bootstrap_errs=False,
     n_bootstraps=100,
     n_samples=None,
@@ -760,12 +865,12 @@ def radial_profile(
 ):
     """
     Convenience function for calculating the radial profile of a galaxy from radio or
-    optical data. Data are azimuthally averaged (median or arithmetic mean) in
-    ellipses/annuli and the radii are defined to be the artihmetic means of the
+    other (e.g., optical) data. Data are azimuthally averaged (median or arithmetic mean)
+    in ellipses/annuli and the radii are defined to be the artihmetic means of the
     ellipses/annuli's circularized radii.
 
-    Note that these radial profile results (i.e., avg_data & avg_noise) are not corrected
-    for inclination.
+    Note that these radial profile results (i.e., avg_data, avg_noise, avg_data_err,
+    avg_noise_err, std_data, std_noise) are not corrected for inclination.
 
     Parameters:
       data :: 2D array
@@ -785,6 +890,20 @@ def radial_profile(
         The noise (uncertainty) array associated with the data. Must have the same shape
         as the data array. If using snr_cutoff, this parameter is required and this array
         should be background-subtracted
+      i_threshold :: float (optional)
+        TODO: implement this
+        If i >= i_threshold, use squares/rectangles that have a thickness of min_width
+        (e.g., the radio beam width) aligned with the major axis instead of
+        ellipses/elliptical annuli. The initial square will be centred on the galactic
+        centre (provided via the center parameter). The next "rectangle" region will be
+        composed of two squares appended on the sides of the initial square along the
+        major axis of the galaxy. In other words, the heights of all the rectangles will
+        be min_width and the widths will be 1, 3, 5, ... times min_width. N.B. for widths
+        greater than 1 min_width, only the outer 2 squares will be used for the average
+        calculation. Lastly, n_annuli = max number of rectangles (e.g., n_annuli=3 =>
+        rectangles of widths 1, 3, 5), a_in & b_in are both zero, and a_out & b_out are
+        the widths and heights of the rectangles.
+        ! FIXME: This is super poorly explained.
       n_annuli :: int (optional)
         The number of ellipses/annuli to create. If n_annuli==1, the function will
         generate an ellipse. If n_annuli>1, the function will generate a central ellipse
@@ -804,18 +923,19 @@ def radial_profile(
         should be in pixel units. If an astropy Quantity, the header or wcs must also be
         provided. This width will be the minimum length of the semi-major/minor axis of an
         ellipse or the minimum distance between the inner & outer rings of an annulus
-        along the semi-major/minor axes. Typically, this is the beam size of the radio
-        telescope or the size of the worst (largest) PSF of the optical telescope
-        If min_width not provided, the FITS header must be provided instead
+        along the semi-major/minor axes. For example, this is typically the beam size of
+        the radio telescope or the size of the worst (largest) PSF of the optical
+        telescope. If min_width not provided, the FITS header must be provided instead
       min_width_ax :: "minor" or "major" (optional)
         The axis along which the minimum width is defined. If "minor", min_width is the
         minimum width and separation of any ellipse/annulus along the minor axis. If
         "major", min_width is the minimum width and separation of any ellipse/annulus
         along the major axis
       header :: `astropy.io.fits.Header` object (optional)
-        The header of the data's FITS file. Required if min_width is not provided; if
-        tele_type=="radio", will set the min_width equal to the radio beam size, if
-        tele_type=="optical", will set the min_width equal to the worst (largest) PSF
+        The header of the data's FITS file. Required if min_width is not provided. If
+        is_radio is True, will set the min_width equal to the radio beam size. Otherwise,
+        will set the min_width according to the header_min_width_key and
+        header_min_width_unit
       wcs :: `astropy.wcs.WCS` object (optional)
         The WCS object corresponding to the data. Required if center is a SkyCoord object
         and header is not provided
@@ -831,20 +951,22 @@ def radial_profile(
       debug_plot :: bool (optional)
         If True, plots intermediate steps of the radial profile averaging calculations
         (i.e., the ellipses/annuli, masked signal, and if calculating the mean, the area
-        over which the mean is calculated)
-      tele_type :: "radio" or "optical" (optional)
-        The type of telescope used to acquire the data. If "radio", then min_width is
-        typically the beam size. If "optical", then min_width is typically the size of the
-        worst PSF (worst image quality) in the image
-      optical_hdr_min_width_key :: str (optional)
+        over which the mean is calculated). Warning: lots of plots will be made for each
+        ellipse/annulus!
+      is_radio :: bool (optional)
+        If True, the inputs correspond to radio data. Otherwise, the inputs are not radio
+        data (e.g., optical, IR, etc.). The only difference is if the user does not input
+        a minimum width, in which case radio data default to the beam size while other
+        data default to the worst image quality specified by the header (also see
+        header_min_width_key and header_min_width_unit)
+      header_min_width_key :: str (optional)
         The FITS header keyword corresponding to the value you wish to use for the
-        min_width. Only relevant if min_width is None and tele_type=="optical"; ignored
-        for tele_type=="radio". Also see optical_hdr_min_width_unit
-      optical_hdr_min_width_unit :: `astropy.units.quantity.Quantity` object (optional)
+        min_width. Only relevant if min_width is None and is_radio is False; ignored if
+        is_radio is True. Also see header_min_width_unit
+      header_min_width_unit :: `astropy.units.quantity.Quantity` object (optional)
         The unit of the min_width parameter from the FITS header (i.e., the unit
-        corresponding to optical_header_min_width_key). Only relevant if min_width is None
-        and tele_type=="optical"; ignored for tele_type=="radio". Also see
-        optical_hdr_min_width_key
+        corresponding to header_min_width_key). Only relevant if min_width is None and
+        is_radio is False; ignored if is_radio is True. Also see header_min_width_key
       bootstrap_errs :: bool (optional)
         If True, estimate the uncertainty in the radial profile results (i.e., avg_data &
         avg_noise) using bootstrapping
@@ -856,11 +978,11 @@ def radial_profile(
         samples per bootstrap iteration is the number of data points enclosed in the
         ellipse/annulus (usually this is what we want). Ignored if bootstrap_errs is False
       bootstrap_seed :: int (optional)
-        The seed to use for bootstrapping (per ellipse/annulus). Ignored if bootstrap_errs
-        is False
+        The seed to use for bootstrapping (per ellipse/annulus); does not affect global
+        seed. Ignored if bootstrap_errs is False
 
-    Returns: (avg_data, avg_noise, avg_data_err, avg_noise_err, radii, annuli, a_ins,
-              a_outs, b_ins, b_outs)
+    Returns: (avg_data, avg_noise, avg_data_err, avg_noise_err, std_data, std_noise,
+              radii, annuli, a_ins, a_outs, b_ins, b_outs)
       avg_data :: 1D array
         The average (i.e., median or arithmetic mean) of the data in each ellipse/annulus.
         Not corrected for inclination
@@ -874,6 +996,11 @@ def radial_profile(
       avg_data_err, avg_noise_err :: 1D arrays or None
         If bootstrap_errs is True, these are the uncertainties in avg_data and avg_noise
         estimated by bootstrapping. If bootstrap_errs is False, these are None
+      std_signal, std_noise :: 1D arrays or None
+        The standard deviation of the signal and noise in each ellipse/annulus. If noise
+        is None, then std_noise is None. N.B. if there are many "bad" points in an
+        ellipse/annulus (i.e., NaNs or infs) and include_bad is True, then this may not be
+        an accurate representation of the standard deviation in that given ellipse/annulus
       radii :: 1D array
         The radii of the ellipses/annuli. The radii are defined to be the artihmetic means
         of the ellipses/annuli's circularized radii
@@ -897,15 +1024,15 @@ def radial_profile(
     if min_width is None:
         if header is None:
             raise ValueError("header must be provided if min_width is not provided")
-        if tele_type == "radio":
-            beam_major, beam_minor, _ = get_beam_size(header)
+        if is_radio:
+            print("Getting minimum width from radio beam size")
+            beam_major, beam_minor, _ = get_beam_size_px(header)
             min_width = np.max((beam_major, beam_minor))
             print("Min width/beam size (pixels):", min_width)
-        elif tele_type == "optical":
-            min_width = header[optical_hdr_min_width_key] * optical_hdr_min_width_unit
-            print("Min width/worst image quality:", min_width)
         else:
-            raise ValueError("tele_type must be 'radio' or 'optical'")
+            print("Getting minimum width from header key/unit")
+            min_width = header[header_min_width_key] * header_min_width_unit
+            print("Min width/worst image quality:", min_width)
     if isinstance(min_width, u.Quantity):
         if wcs is None and header is None:
             raise ValueError(
@@ -923,6 +1050,7 @@ def radial_profile(
         pa,
         min_width,
         min_width_ax=min_width_ax,
+        i_threshold=i_threshold,
         wcs=wcs,
         n_annuli=n_annuli,
         snr_cutoff=snr_cutoff,
@@ -935,8 +1063,23 @@ def radial_profile(
         plot=False,
         bootstrap_errs=False,  # unnecessary at this stage
     )
-    radii = calc_radius(a_ins, a_outs, b_ins, b_outs)
-    avg_data, avg_noise, avg_data_err, avg_noise_err = calc_avg_sn_aperture_multi(
+    if i_threshold is not None:
+        if i_threshold < 0 or ~np.isfinite(i_threshold):
+            raise ValueError("i_threshold must be a finite number >= 0")
+        if i >= i_threshold:
+            # Get circularized radius of a rectangle. r_circ = sqrt(w*h)/pi
+            rtc_factor = np.pi * np.pi  # rectangle to circle factor
+            radii = calc_radius(a_outs, a_outs / rtc_factor, b_ins, b_outs / rtc_factor)
+    else:
+        radii = calc_radius(a_ins, a_outs, b_ins, b_outs)
+    (
+        avg_data,
+        avg_noise,
+        avg_data_err,
+        avg_noise_err,
+        std_data,
+        std_noise,
+    ) = calc_avg_sn_aperture_multi(
         data,
         annuli,
         noise=noise,
@@ -954,6 +1097,8 @@ def radial_profile(
         avg_noise,
         avg_data_err,
         avg_noise_err,
+        std_data,
+        std_noise,
         radii,
         annuli,
         a_ins,
