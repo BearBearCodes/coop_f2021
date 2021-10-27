@@ -138,3 +138,8 @@ sed_fits/
 *.pdf
 *.png
 *.jpg
+
+# Include pdf files in galaxies/ folder and its subfolders
+!galaxies/**/*.pdf
+!galaxies/**/*.png
+!galaxies/**/*.jpg

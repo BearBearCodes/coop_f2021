@@ -742,13 +742,13 @@ def line_profile_idx(data, start, end, wcs=None, extend=False):
                 #     y1 -= diff
             # Move point to bottom or left adge
             if dist_to_bottomleft in [start_to_left, start_to_bottom]:
-                    x0 -= diffx
-                    y0 -= diffy
-                    moved_start = True
+                x0 -= diffx
+                y0 -= diffy
+                moved_start = True
             else:
-                    x1 -= diffx
-                    y1 -= diffy
-                    moved_start = False
+                x1 -= diffx
+                y1 -= diffy
+                moved_start = False
             # Find distance to top or right edge, whichever is closer
             dist_to_topright = np.min([dist_to_top, dist_to_right])
             if dist_to_topright == dist_to_top:
@@ -1626,19 +1626,3 @@ def joint_contour_plot(
     plt.subplots_adjust(wspace=2e-3, hspace=4e-3)
     fig.savefig(fig_savename, bbox_inches="tight") if fig_savename is not None else None
     plt.show()
-
-
-def get_beam_size(header):
-    """
-    Assumes pixel is square.
-
-    TODO: finish docstring
-    """
-    beam = Beam.from_fits_header(header)
-    # Assume square pixels
-    deg_per_px = proj_plane_pixel_scales(WCS(header).celestial)[0] * u.deg
-    #
-    beam_major = (beam.major.to(u.deg) / deg_per_px).to(u.dimensionless_unscaled).value
-    beam_minor = (beam.minor.to(u.deg) / deg_per_px).to(u.dimensionless_unscaled).value
-    beam_pa = (beam.pa + 90.0 * u.deg).to(u.deg).value  # PA starts at N and increases CCW
-    return beam_major, beam_minor, beam_pa
