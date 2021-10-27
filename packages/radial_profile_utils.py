@@ -313,6 +313,7 @@ def create_aper_mask(
     #
     aper_mask = aper.to_mask(method=method)
     aper_mask = aper_mask.to_image(padded_arr.shape)
+    # pylint: disable=no-member
     aper_mask = np.ma.masked_where(aper_mask <= 1e-12, aper_mask).filled(np.nan)
     if plot:
         fig, ax = plt.subplots()
@@ -695,7 +696,7 @@ def fit_annuli(
         for the average calculation. Lastly, n_annuli = max number of rectangles (e.g.,
         n_annuli=3 => rectangles of widths 1, 3, 5), a_in & b_in are both zero, and a_out
         & b_out are the widths and heights of the rectangles.
-        ! FIXME: This is super poorly explained.
+        ! FIXME: The explanation above is awful.
       wcs :: `astropy.wcs.WCS` object (optional)
         The WCS object corresponding to the center parameter (and optionally the
         data/noise arrays). Required if center is a SkyCoord object; ignored otherwise
@@ -762,9 +763,9 @@ def fit_annuli(
     if min_width_ax != "minor" and min_width_ax != "major":
         raise ValueError("min_width_ax must be either 'major' or 'minor'")
     if i_threshold is not None:
-        # if i_threshold < 0 or ~np.isfinite(i_threshold):
-        #     raise ValueError("i_threshold must be a finite number >= 0")
-        raise ValueError("i_threshold is not implemented yet")
+        # if i_threshold < 0 or i_threshold > 90 or not np.isfinite(i_threshold):
+        #     raise ValueError("i_threshold must be a finite number between 0 and 90 deg")
+        raise NotImplementedError("i_threshold is not implemented yet")
     #
     # Calculate basic quantities
     #

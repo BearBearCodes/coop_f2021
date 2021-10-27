@@ -12,6 +12,7 @@ import astropy.coordinates as coord
 import astropy.units as u
 import numpy as np
 
+# My packages
 import radial_profile_utils as rpu
 
 # TODO: add support for highly inclined galaxies (beyond i_threshold)
@@ -368,6 +369,7 @@ class RadialProfile:
             If noise is not None, this contains the areas over which the average noise
             values area calculated. If noise is None, this is None
         """
+        # pylint: disable=unsubscriptable-object
 
         def _make_area_arr(arr, aper):
             aper_mask, padded_arr = rpu.create_aper_mask(
@@ -391,6 +393,7 @@ class RadialProfile:
         data_areas = []
         # Slightly verbose, but I'm guessing this is faster than checking if noise is None
         # in a loop
+        # pylint: disable=not-an-iterable
         if self.noise is None:
             noise_areas = None
             for annulus in self.annuli:
@@ -433,6 +436,7 @@ class RadialProfile:
             The `RadialProfile` object with quantities (i.e., data, noise, avg_data,
             avg_noise) corrected for inclination
         """
+        # pylint: disable=unsubscriptable-object
         if self.avg_data is None:
             raise ValueError("Radial profile must be generated first")
         new_RadialProfile = copy.deepcopy(self)
