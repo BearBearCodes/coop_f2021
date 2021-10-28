@@ -128,10 +128,14 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# VS Code stuff
+.vscode/
+
 # Proprietary data
 *.fit
 *.fits
 vertico_data/
+vertico_data_old/
 sed_fits/
 
 # Non-code files
