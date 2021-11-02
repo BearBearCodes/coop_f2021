@@ -15,7 +15,6 @@ import numpy as np
 # My packages
 import radial_profile_utils as rpu
 
-# TODO: add support for highly inclined galaxies (beyond i_threshold)
 # TODO: make a function to find the ellipse enclosing x% of the data
 
 class RadialProfile:
@@ -32,7 +31,9 @@ class RadialProfile:
       copy()
         Convenience function so the user does not have to import the copy module
 
-    Attributes:
+    Attributes: (data, center, i, pa, noise, avg_data, avg_noise, avg_data_err,
+                avg_noise_err, std_data, std_noise, data_area_mask, noise_area_mask,
+                radii, annuli, a_ins, a_outs, b_ins, b_outs, rp_options)
       data :: 2D array
         The data used for generating a radial profile. If using snr_cutoff, the data
         should be background-subtracted
@@ -69,15 +70,25 @@ class RadialProfile:
         is None, then std_noise is None. N.B. if there are many "bad" points in an
         ellipse/annulus (i.e., NaNs or infs) and include_bad is True, then this may not be
         an accurate representation of the standard deviation in that given ellipse/annulus
+      data_area_mask, noise_area_mask :: 1D arrays or None
+        1D arrays containing the included regions of the data and noise arrays per
+        ellipse/annulus. 1 means the pixel is wholly included while 0 and NaNs mean the
+        pixel is wholly excluded. Numbers between 0 and 1 indicate the relative
+        contribution of that pixel (e.g., 0.5 means the pixel is "half-included"). If
+        noise is None, then noise_area is also None
       radii :: 1D array
         The radii of the ellipses/annuli. The radii are defined to be the artihmetic means
-        of the ellipses/annuli's circularized radii
+        of the ellipses/annuli's circularized radii. If i >= i_threshold, then the radii
+        are the midpoints of the rectangles/rectangular annuli along the galaxy's major
+        axis
       a_ins, a_outs :: 1D arrays
-        The inner and outer semi-major axes of the ellipses/annuli. N.B. an ellipse's
-        inner semi-major axis length is 0
+        The inner and outer semi-major axes of the ellipses/annuli in pixel units. N.B. an
+        ellipse's inner semi-major axis length is 0. If i >= i_threshold, these are the
+        heights of the rectangles in the galaxy's minor axis direction
       b_ins, b_outs :: 1D arrays
-        The inner and outer semi-minor axes of the ellipses/annuli. N.B. an ellipse's
-        inner semi-minor axis length is 0
+        The inner and outer semi-minor axes of the ellipses/annuli in pixel units. N.B. an
+        ellipse's inner semi-minor axis length is 0. If >= i_threshold, these are the
+        widths of the rectangles in the galaxy's major axis direction
       rp_options :: dict
         The parameters used to generate the radial profile (e.g., n_annuli, min_width,
         etc.). Irrelevant attributes are set to None
@@ -138,6 +149,8 @@ class RadialProfile:
         self.avg_noise_err = None
         self.std_data = None
         self.std_noise = None
+        self.data_area_masks = None
+        self.noise_area_masks = None
         self.radii = None
         self.annuli = None
         self.a_ins = None
@@ -145,7 +158,6 @@ class RadialProfile:
         self.b_ins = None
         self.b_outs = None
         self.rp_options = None
-        # self._generated_rp = False  # bool to track if radial profile has been generated
 
     def copy(self):
         """
@@ -176,38 +188,51 @@ class RadialProfile:
         is_radio=True,
         header_min_width_key="IQMAX",
         header_min_width_unit=u.arcsec,
+        high_i_height=None,
         bootstrap_errs=False,
         n_bootstraps=100,
         n_samples=None,
         bootstrap_seed=None,
     ):
         """
-        Convenience function for calculating the radial profile of a galaxy from radio
-        or other (e.g., optical) data. Data are azimuthally averaged (median or
-        arithmetic mean) in ellipses/annuli and the radii are defined to be the
-        artihmetic means of the ellipses/annuli's circularized radii.
+        Calculates the radial profile of a galaxy from radio or other (e.g., optical)
+        data. Data are azimuthally averaged (median or arithmetic mean) in ellipses/annuli
+        and the radii are defined to be the artihmetic means of the ellipses/annuli's
+        circularized radii. If it is a high-inclination galaxy, we fit rectangles to the
+        data instead of ellipses/annuli. In this case, each radius is defined to be the
+        midpoint of the rectangle/rectangular cutout along the galaxy's major axis.
 
-        Note that these radial profile results (i.e., avg_data, avg_noise,
-        avg_data_err, avg_noise_err, std_data, std_noise) are not corrected for
-        inclination.
+        Note that these radial profile results (i.e., avg_data, avg_noise, avg_data_err,
+        avg_noise_err, std_data, std_noise) are not corrected for inclination.
+
+        Finally, if i >= i_threshold, the radial profile is calculated using rectangles
+        instead of ellipses/annuli. All the keywords, parameters, and return values remain
+        the same, except mentally replace "ellipse/annulus" with "rectangle/rectangular
+        annulus". Regarding return values, a_out will represent the heights of the
+        rectangles (perpendicular to the galaxy's major axis) while b_out will represent
+        the widths (along the galaxy's major axis). b_in will represent the start of the
+        rectangular annulus (looks more like a rectangular sandwich) while a_in will be
+        equal to a_out except for the first element, which will be zero (i.e., an ordinary
+        rectangle). N.B. the i_threshold and high_i_height parameters. Also see the
+        documentation for fit_rectangles().
 
         Also, will set irrelevant parameters to None.
 
         Parameters:
           i_threshold :: float (optional)
-            TODO: implement this
-            If i >= i_threshold, use squares/rectangles that have a thickness of min_width
-            (e.g., the radio beam width) aligned with the major axis instead of
-            ellipses/elliptical annuli. The initial square will be centred on the galactic
-            centre (provided via the center parameter). The next "rectangle" region will
-            be composed of two squares appended on the sides of the initial square along
-            the major axis of the galaxy. In other words, the heights of all the
-            rectangles will be min_width and the widths will be 1, 3, 5, ... times
-            min_width. N.B. for widths greater than 1 min_width, only the outer 2 squares
-            will be used for the average calculation. Lastly, n_annuli = max number of
-            rectangles (e.g., n_annuli=3 => rectangles of widths 1, 3, 5), a_in & b_in are
-            both zero, and a_out & b_out are the widths and heights of the rectangles.
-            ! FIXME: This is super poorly explained.
+            If i >= i_threshold, use rectangles/rectangular annuli that have a thickness
+            of min_width (e.g., the radio beam width) aligned with the major axis instead
+            of ellipses/elliptical annuli. The initial rectangle will be centred on the
+            galactic centre (provided via the center parameter). The next "rectangular
+            sandwich" region will be composed of two rectangles identitcal to the first
+            appended on the sides of the initial rectangle along the major axis of the
+            galaxy. In other words, the heights of all the rectangles will be equal and
+            the widths will be 1, 3, 5, ... times min_width. N.B. for widths greater than
+            1 min_width, only the outer 2 rectangles will be used for the average
+            calculation. Lastly, here is how to (mentally) map the variable names
+            n_annuli = max number of rectangles (e.g., n_annuli=3 => rectangles of widths
+            1, 3, 5), a = heights, b = widths. Also see the high_i_height parameter and
+            the documentation for fit_rectangles() in radial_profile_utils.py
           n_annuli :: int (optional)
             The number of ellipses/annuli to create. If n_annuli==1, the function will
             generate an ellipse. If n_annuli>1, the function will generate a central
@@ -273,6 +298,15 @@ class RadialProfile:
             The unit of the min_width parameter from the FITS header (i.e., the unit
             corresponding to header_min_width_key). Only relevant if min_width is None and
             is_radio is False; ignored if is_radio is True. Also see header_min_width_key
+          high_i_height :: "min_width", float, or `astropy.units.quantity.Quantity` object
+                           or None (optional)
+            If i >= i_threshold, this is the size of the rectangles/rectangular annuli
+            along the galaxy's minor axis. If "min_width", set the heights of the
+            rectangles/annuli equal to min_width. If a float, it should be in pixel units.
+            If an astropy Quantity, either header or wcs must also be provided. If None,
+            automatically extend the rectangle/annulus to the edges of the image (at which
+            point it will likely no longer be a perfect rectangle. N.B. the include_bad
+            parameter)
           bootstrap_errs :: bool (optional)
             If True, estimate the uncertainty in the radial profile results (i.e.,
             avg_data & avg_noise) using bootstrapping
@@ -319,6 +353,7 @@ class RadialProfile:
             "is_radio": is_radio,
             "header_min_width_key": header_min_width_key,
             "header_min_width_unit": header_min_width_unit,
+            "high_i_height": high_i_height,
             "bootstrap_errs": bootstrap_errs,
             "n_bootstraps": n_bootstraps,
             "n_samples": n_samples,
@@ -335,6 +370,8 @@ class RadialProfile:
             new_RadialProfile.avg_noise_err,
             new_RadialProfile.std_data,
             new_RadialProfile.std_noise,
+            new_RadialProfile.data_area_masks,
+            new_RadialProfile.noise_area_masks,
             new_RadialProfile.radii,
             new_RadialProfile.annuli,
             new_RadialProfile.a_ins,
@@ -351,7 +388,6 @@ class RadialProfile:
             **rp_options,
         )
         new_RadialProfile.rp_options = rp_options
-        # self._generated_rp = True  # radial profile has been created
         return new_RadialProfile
 
     def calc_area(self):
@@ -369,51 +405,25 @@ class RadialProfile:
             If noise is not None, this contains the areas over which the average noise
             values area calculated. If noise is None, this is None
         """
-        # pylint: disable=unsubscriptable-object
-
-        def _make_area_arr(arr, aper):
-            aper_mask, padded_arr = rpu.create_aper_mask(
-                arr,
-                aper,
-                include_bad=self.rp_options["include_bad"],
-                method=self.rp_options["method"],
-            )
-            padded_arr[~np.isnan(padded_arr)] = 1.0
-            area_arr = padded_arr * aper_mask
-            return area_arr
-
+        # pylint: disable=not-an-iterable
         if self.avg_data is None:
             raise ValueError("Radial profile must be generated first")
-        masked_data, masked_noise = rpu.mask_bad(
-            self.data,
-            self.rp_options["include_bad"],
-            noise=self.noise,
-            bad_fill_value=0.0,
-        )
         data_areas = []
-        # Slightly verbose, but I'm guessing this is faster than checking if noise is None
-        # in a loop
-        # pylint: disable=not-an-iterable
-        if self.noise is None:
-            noise_areas = None
-            for annulus in self.annuli:
-                data_area = np.nansum(_make_area_arr(masked_data, annulus))
-                data_areas.append(data_area)
-        else:
-            noise_areas = []
-            for annulus in self.annuli:
-                data_area = np.nansum(_make_area_arr(masked_data, annulus))
-                data_areas.append(data_area)
-                noise_area = np.nansum(_make_area_arr(masked_noise, annulus))
-                noise_areas.append(noise_area)
+        for data_area_mask in self.data_area_masks:
+            data_areas.append(np.nansum(data_area_mask))
         data_areas = np.asarray(data_areas)
-        noise_areas = np.asarray(noise_areas) if noise_areas is not None else None
-        if noise_areas is not None:
+        if self.noise_area_masks is not None:
+            noise_areas = []
+            for noise_area_mask in self.noise_area_masks:
+                noise_areas.append(np.nansum(noise_area_mask))
+            noise_areas = np.asarray(noise_areas)
             if not np.all(data_areas == noise_areas):
                 print(
                     "WARNING: not all data areas equal noise areas. Please double check "
                     + "inputs and notify me (Isaac Cheng) with a minimal working example"
                 )
+        else:
+            noise_areas = None
         return data_areas, noise_areas
 
     def correct_for_i(self, i_replacement=None):

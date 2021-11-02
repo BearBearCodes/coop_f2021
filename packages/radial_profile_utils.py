@@ -14,12 +14,38 @@ import matplotlib.pyplot as plt
 import numpy as np
 from astropy.wcs import WCS
 from astropy.wcs.utils import proj_plane_pixel_scales
-from photutils.aperture import (BoundingBox, EllipticalAnnulus,
-                                EllipticalAperture, RectangularAperture)
+from photutils.aperture import (
+    BoundingBox,
+    EllipticalAnnulus,
+    EllipticalAperture,
+    RectangularAnnulus,
+    RectangularAperture,
+)
 from radio_beam import Beam
 
-# TODO: add support for highly inclined galaxies (beyond i_threshold)
 # TODO: make a function to find the ellipse enclosing x% of the data
+
+
+class RectangularSandwich(RectangularAnnulus):
+    """
+    `photutils.apertureRectangularAnnulus` except it allows h_in to be equal to h_out,
+    thereby making a sandwich-like shape.
+    """
+
+    def __init__(self, positions, w_in, w_out, h_out, h_in=None, theta=0.0):
+        if not w_out > w_in:
+            raise ValueError('"w_out" must be greater than "w_in"')
+        self.positions = positions
+        self.w_in = w_in
+        self.w_out = w_out
+        self.h_out = h_out
+        if h_in is None:
+            h_in = self.w_in * self.h_out / self.w_out
+        else:
+            if not h_out >= h_in:
+                raise ValueError('"h_out" must be greater than or equal to "h_in"')
+        self.h_in = h_in
+        self.theta = theta
 
 
 def calc_eccentricity(inclination):
@@ -47,12 +73,14 @@ def calc_eccentricity(inclination):
     return np.sqrt(1 - cosi * cosi)
 
 
-def calc_radius(a_in, a_out, b_in, b_out):
+def calc_radius(b_in, b_out, a_in=None, a_out=None, is_rectangle=False):
     """
-    Calculates the "radius" of ellipses/elliptical annuli. Each radius is defined as the
-    arithmetic mean of the circularized radii (inner and outer circularized radii) of an
-    annulus. For an ellipse, the inner semi-major and semi-minor axes should be treated as
-    zero.
+    Calculates the "radius" of ellipses/elliptical annuli or rectangles/rectangular
+    annuli.
+
+    For elliptical annuli, each radius is defined as the arithmetic mean of the
+    circularized radii (inner and outer circularized radii) of an annulus. For an ellipse,
+    the inner semi-major and semi-minor axes should be treated as zero.
 
     The circularized radius, r, of an ellipse is the equivalent radius such that a circle
     with radius r has the same area as the ellipse. If a and b are the semi-major and
@@ -63,44 +91,68 @@ def calc_radius(a_in, a_out, b_in, b_out):
     circularized radii of the two ellipses that form the annulus. For an ellipse's average
     radius, the inner semi-major and semi-minor axes should be treated as zero.
 
-    (OLD DEFINITION BELOW)
-    The radius of an ellipse/annulus is defined as the arithmetic mean of the
-    ellipse's/annulus' midpoints along the semimajor & semiminor axes.
+    For rectangular annuli, each radius is defined as the midpoint of the rectangular
+    annulus' widths (e.g., along the major axis of a target). For a rectangle, the inner
+    width should be treated as zero.
 
     Parameters:
-      a_in, a_out :: floats or array of floats
-        The inner and outer semi-major axes of the ellipses/annulsi. N.B. an ellipse's
-        inner semi-major axis length is 0
       b_in, b_out :: floats or array of floats
-        The inner and outer semi-minor axes of the ellipses/annuli. N.B. an ellipse's
-        inner semi-minor axis length is 0
+        If is_rectangle is False, these are the inner and outer semi-minor axes of the
+        ellipses/annuli. N.B. an ellipse's inner semi-minor axis length is 0.
+        If is_rectangle is True, these are the inner and outer widths of the rectangular
+        annulus (aka RectangularSandwich). An ordinary rectangle has an inner width (b_in)
+        of zero
+      a_in, a_out :: floats or array of floats
+        The inner and outer semi-major axes of the ellipses/annuli. N.B. an ellipse's
+        inner semi-major axis length is 0. These are ignored if is_rectangle is True
+      is_rectangle :: bool (optional)
+        If True, define the radius to be the midpoint of the rectangular annulus (aka
+        RectangularSandwich) along the width dimension. Note that the widths of the
+        rectangles (which define the rectangle's dimensions along the major axis) should
+        be mapped to b_in and b_out. This is opposite to the convention used for
+        ellipses/annuli (sorry!)
 
     Returns: radius
       radius :: float or array of floats
-        The radii of the ellipses/annuli as defined above
+        The radii of the ellipses/annuli or rectangles/rectangular annuli as defined above
     """
-    # # OLD DEFINITION
-    # a_mid = (a_in + a_out) / 2
-    # b_mid = (b_in + b_out) / 2
-    # return (a_mid + b_mid) / 2
-    #
-    # NEW DEFINITION
-    #
-    inner_circularized_radius = np.sqrt(a_in * b_in)
-    outer_circularized_radius = np.sqrt(a_out * b_out)
-    return 0.5 * (inner_circularized_radius + outer_circularized_radius)
+    if is_rectangle:
+        # if a_in is not None or a_out is not None:
+        #     print("Info: ignoring a_in and a_out since is_rectangle is True")
+        return 0.5 * (b_in + b_out)
+    else:
+        if a_in is None or a_out is None:
+            raise ValueError("a_in and a_out must be provided for ellipses/annuli")
+        inner_circularized_radius = np.sqrt(a_in * b_in)
+        outer_circularized_radius = np.sqrt(a_out * b_out)
+        return 0.5 * (inner_circularized_radius + outer_circularized_radius)
 
 
 def correct_for_i(data, i, i_threshold=None, i_replacement=None):
     """
     Corrects for the inclination(s) of the galaxy/galaxies. Typically used if the data or
     their precursors are affected by optically thick properties of the galaxy (e.g.,
-    finding the gas surface density from CO).
+    estimating the gas surface density in units of solar masses per sqaure parsec from CO
+    luminosities).
 
     The inclination, i, is defined as:
                                     cos(i) := b/a
     where b is the length of the semi-minor axis and a is the length of the semi-major
     axis.
+
+    If the calibration assumes the galaxy is face-on, then we must correct for any derived
+    properties of the galaxy (e.g., gas surface density). Since the path length changes as
+    1/cos(i), we must multiply by cos(i) to correct for the inclination. See
+    https://ui.adsabs.harvard.edu/abs/2008MNRAS.388.1708G for more details.
+
+    Finally, note that correcting for i >= approx. 80 degrees becomes very unreliable
+    (Brown et al., 2021). As such, you may wish to use an i_threshold value, which will
+    replace any i-values >= i_threshold with some i_replacement value. For example, if a
+    galaxy has an inclination of i=81, an i_threshold=80 with an i_replacement=3.1415
+    means that the galaxy's inclination correction will use an i-value of 3.1415 instead
+    of 81 (don't actually choose such an absurd i_replacement value). Setting an
+    i_threshold i_replacement also prevents quantites from approaching zero arbitrarily as
+    i nears 90 degrees.
 
     Parameters:
       data :: scalar or array of scalars
@@ -255,10 +307,13 @@ def mask_bad(signal, include_bad, noise=None, bad_fill_value=0.0):
     return masked_signal, masked_noise
 
 
-def create_aper_mask(
-    arr, aper, include_bad=True, method="exact", plot=False, plot_title="Mask"
+def create_aper_mask_with_pad(
+    arr, aper, include_bad=False, method="exact", plot=False, plot_title="Mask"
 ):
     """
+    DEPRECATED! Doesn't really make sense to use this unless you want to include values
+    beyond the extent of the array (as zeros).
+
     Creates an aperture mask given a `photutils.aperture.PixelAperture` object and the
     array to apply the mask to. If the extent of the aperture is larger than that of the
     arr, this function will also automatically pad relevant arrays.
@@ -286,7 +341,7 @@ def create_aper_mask(
         The arr padded to match the extent of the aperture mask. If no padding was
         necessary, this is equivalent to the input arr
     """
-    fill_value = 0.0 if include_bad else np.nan
+    print("WARNING: the use of create_aper_mask_with_pad() is deprecated.")
     #
     # Check inputs
     #
@@ -301,6 +356,7 @@ def create_aper_mask(
         (union_bbox.iymax - arr_bbox.iymax, arr_bbox.iymin - union_bbox.iymin),
         (arr_bbox.ixmin - union_bbox.ixmin, union_bbox.ixmax - arr_bbox.ixmax),
     )
+    fill_value = 0.0 if include_bad else np.nan
     padded_arr = np.pad(arr, pad_amount, mode="constant", constant_values=fill_value)
     #
     # Modify centre of aperture if necessary
@@ -313,8 +369,7 @@ def create_aper_mask(
     #
     aper_mask = aper.to_mask(method=method)
     aper_mask = aper_mask.to_image(padded_arr.shape)
-    # pylint: disable=no-member
-    aper_mask = np.ma.masked_where(aper_mask <= 1e-12, aper_mask).filled(np.nan)
+    aper_mask[aper_mask <= 1e-12] = np.nan
     if plot:
         fig, ax = plt.subplots()
         img = ax.imshow(aper_mask, origin="lower")
@@ -324,11 +379,46 @@ def create_aper_mask(
     return aper_mask, padded_arr
 
 
+def create_aper_mask(arr, aper, method="exact", plot=False, plot_title="Mask"):
+    """
+    Creates an aperture mask from a `photutils.aperture.PixelAperture` object. The maximum
+    extent of the aperture mask is the extent of the input array. This function makes more
+    sense to use than create_aper_mask_with_pad().
+
+    Parameters:
+      arr :: 2D array
+        The array to mask
+      aper :: `photutils.aperture.PixelAperture` object
+        The aperture to use as the mask
+      method :: "exact" or "center" or "subpixel" (optional)
+        The `photutils.aperture.aperture_photometry` method used to create the aperture
+        mask
+      plot :: bool (optional)
+        If True, plots the aperture mask
+      plot_title :: str (optional)
+        The title of the plot. Ignored if plot is False
+
+    Returns: aper_mask
+      aper_mask :: 2D array
+        The aperture mask to be applied to arr
+    """
+    aper_mask = aper.to_mask(method=method)
+    aper_mask = aper_mask.to_image(arr.shape)
+    aper_mask[aper_mask <= 1e-12] = np.nan
+    if plot:
+        fig, ax = plt.subplots()
+        img = ax.imshow(aper_mask, origin="lower")
+        fig.colorbar(img)
+        ax.set_title(plot_title)
+        plt.show()
+    return aper_mask
+
+
 def calc_avg_sn_aperture(
     signal,
     aper,
     noise=None,
-    include_bad=True,
+    include_bad=False,
     func="median",
     method="exact",
     plot=False,
@@ -341,9 +431,12 @@ def calc_avg_sn_aperture(
     supported by `photutils.aperture.PixelAperture`. Only works with one aperture per
     function call (see calc_avg_sn_aperture_multi() below).
 
-    If the extent of the aperture is larger than the signal or noise arrays, this function
-    will automatically pad relevant arrays to ensure the mean/median is calculated
-    correctly.
+    If the extent of the aperture is larger than the signal or noise arrays, the aperture
+    mask will automatically be cut off at the edges of the signal/noise arrays (old
+    behaviour used create_aper_mask_with_pad()).
+
+    This function takes into account all aperture edge conditions and the effects of
+    include_bad.
 
     Parameters:
       signal :: 2D array
@@ -372,7 +465,8 @@ def calc_avg_sn_aperture(
         _n_samples, _seed). Only relevant if bootstrap_errs is True. If bootstrapping is
         taking too long, consider decreasing _n_bootstraps and/or _n_samples
 
-    Returns: avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise
+    Returns: (avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise,
+              signal_area_mask, noise_area_mask)
       avg_signal :: float
         The average (either median or arithmetic mean) signal of the data in the aperture
       avg_noise :: float or None
@@ -395,6 +489,17 @@ def calc_avg_sn_aperture(
         the aperture. N.B. if there are many "bad" points in the aperture (i.e., NaNs or
         infs) and include_bad is True, then this may not be an accurate representation of
         the standard deviation. If noise is None, this is None
+      signal_area_mask :: 2D array
+        The mask showing the included regions of the signal array. 1 means the pixel is
+        wholly included while 0 and NaNs mean the pixel is wholly excluded. Numbers
+        between 0 and 1 indicate the relative contribution of that pixel (e.g., 0.5 means
+        the pixel is "half-included")
+      noise_area_mask :: 2D array or None
+        If noise is not None, this is the mask showing the included regions of the noise
+        array. 1 means the pixel is wholly included while 0 and NaNs mean the pixel is
+        wholly excluded. Numbers between 0 and 1 indicate the relative contribution of
+        that pixel (e.g., 0.5 means the pixel is "half-included"). If noise is None, this
+        is also None
     """
 
     def _debug_plot(_arr, title=None):
@@ -451,53 +556,43 @@ def calc_avg_sn_aperture(
     #
     # Check inputs and create array mask
     #
-    # mask, fill_value = _make_input_mask(signal, aper, noise, include_bad)
     if aper.positions[0] > signal.shape[0] or aper.positions[1] > signal.shape[1]:
         print("WARNING: Centre of aperture is not within extent of signal array!")
     fill_value = 0.0 if include_bad else np.nan
-    # if noise is not None:
-    #     if np.shape(noise) != np.shape(signal):
-    #         raise ValueError("signal and noise arrays must have the same shape!")
-    #     mask = (~np.isfinite(signal)) | (~np.isfinite(noise))
-    # else:
-    #     mask = ~np.isfinite(signal)
-    # #
-    # #
-    # signal = np.ma.masked_array(signal, mask=mask).filled(fill_value)
-    # if noise is not None:
-    #     noise = np.ma.masked_array(noise, mask=mask).filled(fill_value)
     signal, noise = mask_bad(signal, include_bad, noise=noise, bad_fill_value=fill_value)
     #
     # Create aperture masks and pad arrays if necessary
     #
-    aper_mask_signal, padded_signal = create_aper_mask(
-        signal,
-        aper,
-        include_bad=include_bad,
-        method=method,
-        plot=plot,
-        plot_title="Signal Mask",
+    aper_mask_signal = create_aper_mask(
+        signal, aper, method=method, plot=plot, plot_title="Signal Mask",
     )
     if noise is not None:
-        aper_mask_noise, padded_noise = create_aper_mask(
-            noise,
-            aper,
-            include_bad=include_bad,
-            method=method,
-            plot=plot,
-            plot_title="Noise Mask",
+        aper_mask_noise = create_aper_mask(
+            noise, aper, method=method, plot=plot, plot_title="Noise Mask",
         )
+    #
+    # Calculate regions over which to calculate averages
+    #
+    avg_noise = None
+    masked_signal = signal * aper_mask_signal
+    if plot:
+        _debug_plot(masked_signal, title="Masked signal")
+    if noise is not None:
+        masked_noise = noise * aper_mask_noise
+        if plot:
+            _debug_plot(masked_noise, title="Masked noise")
+    signal_area_mask = np.copy(masked_signal)
+    signal_area_mask[~np.isnan(signal_area_mask)] = 1.0
+    signal_area_mask = signal_area_mask * aper_mask_signal
+    if noise is not None:
+        noise_area_mask = np.copy(masked_noise)
+        noise_area_mask[~np.isnan(noise_area_mask)] = 1.0
+        noise_area_mask = noise_area_mask * aper_mask_noise
+    else:
+        noise_area_mask = None
     #
     # Calculate averages
     #
-    avg_noise = None
-    masked_signal = padded_signal * aper_mask_signal
-    signal_area, noise_area = None, None
-    if noise is not None:
-        masked_noise = padded_noise * aper_mask_noise
-    if plot:
-        _debug_plot(masked_signal, title="Masked signal")
-        _debug_plot(masked_noise, title="Masked noise")
     if func == "median":
         func = np.nanmedian
         avg_signal = func(masked_signal)
@@ -507,21 +602,15 @@ def calc_avg_sn_aperture(
         func = np.nansum
         # Straight arithmetic sum divided by area (incl. edge effects)
         avg_signal = func(masked_signal)
-        signal_area = np.copy(masked_signal)
-        signal_area[~np.isnan(signal_area)] = 1.0
-        signal_area = signal_area * aper_mask_signal
-        avg_signal = avg_signal / np.nansum(signal_area)
+        avg_signal = avg_signal / np.nansum(signal_area_mask)
         if plot:
-            _debug_plot(signal_area, title="Dividing signal by this area")
+            _debug_plot(signal_area_mask, title="Dividing signal by this area")
         if noise is not None:
             # Add noise in quadrature then divide by area (incl. edge effects)
-            avg_noise = func(masked_noise * padded_noise)
-            noise_area = np.copy(masked_noise)
-            noise_area[~np.isnan(noise_area)] = 1.0
-            noise_area = noise_area * aper_mask_noise
-            avg_noise = np.sqrt(avg_noise) / np.nansum(noise_area)
+            avg_noise = func(masked_noise * noise)
+            avg_noise = np.sqrt(avg_noise) / np.nansum(noise_area_mask)
             if plot:
-                _debug_plot(noise_area, title="Dividing noise by this area")
+                _debug_plot(noise_area_mask, title="Dividing noise by this area")
     else:
         raise ValueError("func must be 'median' or 'mean'")
     #
@@ -542,7 +631,7 @@ def calc_avg_sn_aperture(
             masked_signal,
             func,
             _is_noise=False,
-            _area=signal_area,
+            _area=signal_area_mask,
             **bootstrap_errs_kwargs,
         )
         if noise is not None:
@@ -550,7 +639,7 @@ def calc_avg_sn_aperture(
                 masked_noise,
                 func,
                 _is_noise=True,
-                _area=noise_area,
+                _area=noise_area_mask,
                 **bootstrap_errs_kwargs,
             )
     #
@@ -558,13 +647,22 @@ def calc_avg_sn_aperture(
     #
     std_signal = np.nanstd(masked_signal)
     std_noise = np.nanstd(masked_noise) if noise is not None else None
-    return avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise
+    return (
+        avg_signal,
+        avg_noise,
+        avg_signal_err,
+        avg_noise_err,
+        std_signal,
+        std_noise,
+        signal_area_mask,
+        noise_area_mask,
+    )
 
 
 def calc_avg_sn_aperture_multi(signal, apers, noise=None, **kwargs):
     """
     Wrapper function for convenient use of calc_avg_sn_aperture() with multiple apertures
-    sharing the same signal & noise arrays
+    sharing the same signal & noise arrays.
 
     Parameters:
       signal :: 2D array
@@ -578,7 +676,8 @@ def calc_avg_sn_aperture_multi(signal, apers, noise=None, **kwargs):
         Keyword arguments to be passed to calc_avg_sn_aperture() (i.e., include_bad, func,
         method, plot, bootstrap_errs, _n_bootstraps, _n_samples, _seed)
 
-    Returns: avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise
+    Returns: (avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise,
+              signal_area_mask, noise_area_mask)
       avg_signal :: 1D array
         The apertures' signal averages (either median or arithmetic mean)
       avg_noise :: 1D array or None
@@ -601,9 +700,21 @@ def calc_avg_sn_aperture_multi(signal, apers, noise=None, **kwargs):
       std_noise :: 1D array or None
         If noise is not None, this is a 1D array containing the standard deviations of the
         noise
+      signal_area_mask :: 1D array
+        A 1D array containing the included regions of the signal array per aperture. 1
+        means the pixel is wholly included while 0 and NaNs mean the pixel is wholly
+        excluded. Numbers between 0 and 1 indicate the relative contribution of that pixel
+        (e.g., 0.5 means the pixel is "half-included")
+      noise_area_mask :: 1D array or None
+        If noise is not None, this is a 1D array containing the included regions of the
+        noise array per aperture. 1 means the pixel is wholly included while 0 and NaNs
+        mean the pixel is wholly excluded. Numbers between 0 and 1 indicate the relative
+        contribution of that pixel (e.g., 0.5 means the pixel is "half-included"). If
+        noise is None, this is also None
     """
     avg_signal, avg_noise, avg_signal_err, avg_noise_err = [], [], [], []
     std_signal, std_noise = [], []
+    signal_area_mask, noise_area_mask = [], []
     for aper in apers:
         (
             aper_signal,
@@ -612,6 +723,8 @@ def calc_avg_sn_aperture_multi(signal, apers, noise=None, **kwargs):
             aper_noise_err,
             aper_signal_std,
             aper_noise_std,
+            aper_signal_area_mask,
+            aper_noise_area_mask,
         ) = calc_avg_sn_aperture(signal, aper, noise, **kwargs)
         avg_signal.append(aper_signal)
         avg_noise.append(aper_noise)
@@ -619,15 +732,29 @@ def calc_avg_sn_aperture_multi(signal, apers, noise=None, **kwargs):
         avg_noise_err.append(aper_noise_err)
         std_signal.append(aper_signal_std)
         std_noise.append(aper_noise_std)
+        signal_area_mask.append(aper_signal_area_mask)
+        noise_area_mask.append(aper_noise_area_mask)
     avg_signal, avg_noise = np.asarray(avg_signal), np.asarray(avg_noise)
     avg_signal_err, avg_noise_err = np.asarray(avg_signal_err), np.asarray(avg_noise_err)
     std_signal, std_noise = np.asarray(std_signal), np.asarray(std_noise)
+    #
     # In this case, last element is None <=> any element is None <=> all elements are None
+    #
     avg_noise = None if avg_noise[-1] is None else avg_noise
     avg_signal_err = None if avg_signal_err[-1] is None else avg_signal_err
     avg_noise_err = None if avg_noise_err[-1] is None else avg_noise_err
     std_noise = None if std_noise[-1] is None else std_noise
-    return avg_signal, avg_noise, avg_signal_err, avg_noise_err, std_signal, std_noise
+    noise_area_mask = None if noise_area_mask[-1] is None else noise_area_mask
+    return (
+        avg_signal,
+        avg_noise,
+        avg_signal_err,
+        avg_noise_err,
+        std_signal,
+        std_noise,
+        signal_area_mask,
+        noise_area_mask,
+    )
 
 
 def fit_annuli(
@@ -636,7 +763,6 @@ def fit_annuli(
     pa,
     min_width,
     min_width_ax="minor",
-    i_threshold=None,
     wcs=None,
     n_annuli=None,
     snr_cutoff=None,
@@ -648,7 +774,8 @@ def fit_annuli(
     """
     Fits and creates `photutils.aperture.EllipticalAnnulus` (annulus) and
     `photutils.aperture.EllipticalAperture` (ellipse) objects given the user's criteria.
-    The user must specify exactly one of: n_annuli or snr_cutoff.
+    The user must specify exactly one of: n_annuli or snr_cutoff. This method should only
+    be used for low-inclination objects.
 
     If creating more than one object (i.e., explicitly through the n_annuli parameter or
     implicitly through the snr_cutoff parameter), the first (central) object will be an
@@ -657,6 +784,9 @@ def fit_annuli(
 
     Note that if snr_cutoff is specified, the input data and noise must also be provided
     and these 2D arrays should be background-subtracted.
+
+    Here, the a_* arrays are equivalent to heights in fit_rectangles() and b_* arrays are
+    equivalent to widths in fit_rectangles().
 
     Parameters:
       center :: 2-tuple of ints/floats or `astropy.coordinates.SkyCoord` object
@@ -669,37 +799,22 @@ def fit_annuli(
       pa :: float
         The position angle of all ellipses/annuli. The position angle is defined as the
         angle starting from north and increasing toward the east counter-clockwise
-      min_width :: float
+      min_width :: float or `astropy.units.quantity.Quantity` object
         The minimum width and separation of all ellipses/annuli. If a float, min_width
-        should be in pixel units. If an astropy Quantity, the header or wcs must also be
-        provided. This width will be the minimum length of the semi-major/minor axis of an
-        ellipse or the minimum distance between the inner & outer rings of an annulus
-        along the semi-major/minor axes. For example, this is typically the beam size of
-        the radio telescope or the size of the worst (largest) PSF of an optical
-        telescope.
-        If min_width not provided, the FITS header must be provided instead
+        should be in pixel units. If an astropy Quantity, the wcs must also be provided.
+        This width will be the minimum length of the semi-major/minor axis of an ellipse
+        or the minimum distance between the inner & outer rings of an annulus along the
+        semi-major/minor axes. For example, this is typically the beam size of the radio
+        telescope or the size of the worst (largest) PSF of an optical telescope
       min_width_ax :: "minor" or "major" (optional)
         The axis along which the minimum width is defined. If "minor", min_width is the
         minimum width and separation of any ellipse/annulus along the minor axis. If
         "major", min_width is the minimum width and separation of any ellipse/annulus
         along the major axis
-      i_threshold :: float (optional)
-        TODO: implement this
-        If i >= i_threshold, use squares/rectangles that have a thickness of min_width
-        (e.g., the radio beam width) aligned with the major axis instead of
-        ellipses/elliptical annuli. The initial square will be centred on the galactic
-        centre (provided via the center parameter). The next "rectangle" region will be
-        composed of two squares appended on the sides of the initial square along the
-        major axis defined by the position angle. In other words, the heights of all the
-        rectangles will be min_width and the widths will be 1, 3, 5, ... times min_width.
-        N.B. for widths greater than 1 min_width, only the outer 2 squares will be used
-        for the average calculation. Lastly, n_annuli = max number of rectangles (e.g.,
-        n_annuli=3 => rectangles of widths 1, 3, 5), a_in & b_in are both zero, and a_out
-        & b_out are the widths and heights of the rectangles.
-        ! FIXME: The explanation above is awful.
       wcs :: `astropy.wcs.WCS` object (optional)
-        The WCS object corresponding to the center parameter (and optionally the
-        data/noise arrays). Required if center is a SkyCoord object; ignored otherwise
+        The WCS object corresponding to the center parameter (and typically also the
+        data/noise arrays). Required if center is a SkyCoord object or if min_width not in
+        pixel units
       n_annuli :: int (optional)
         The number of ellipses/annuli to create. If n_annuli==1, the function will
         generate an ellipse. If n_annuli>1, the function will generate a central ellipse
@@ -754,7 +869,7 @@ def fit_annuli(
         annuli.append(annulus)
 
     #
-    # Check inputs
+    # Check some inputs
     #
     if isinstance(center, coord.SkyCoord):
         if wcs is None:
@@ -762,10 +877,12 @@ def fit_annuli(
         center = wcs.world_to_pixel(center)
     if min_width_ax != "minor" and min_width_ax != "major":
         raise ValueError("min_width_ax must be either 'major' or 'minor'")
-    if i_threshold is not None:
-        # if i_threshold < 0 or i_threshold > 90 or not np.isfinite(i_threshold):
-        #     raise ValueError("i_threshold must be a finite number between 0 and 90 deg")
-        raise NotImplementedError("i_threshold is not implemented yet")
+    if isinstance(min_width, u.Quantity):
+        if wcs is None:
+            raise ValueError("wcs must be provided if min_width not in pixels")
+        arcsec_per_px = (proj_plane_pixel_scales(wcs.celestial) * u.deg).to(u.arcsec)
+        min_width = np.nanmax((min_width.to(u.arcsec) / arcsec_per_px).value)
+        print("Min width (pixels):", min_width)
     #
     # Calculate basic quantities
     #
@@ -805,23 +922,24 @@ def fit_annuli(
         )
         num = 0
         _append_annulus(num)
-        avg_data, avg_noise, _, _, _, _ = calc_avg_sn_aperture(
+        avg_data, avg_noise = calc_avg_sn_aperture(
             data, annuli[-1], noise=noise, **kwargs
-        )
+        )[:2]
         avg_snr = avg_data / avg_noise
         if avg_snr < snr_cutoff or ~np.isfinite(avg_snr):
             raise ValueError(
                 "Failed ellipse fitting on 1st attempt. Either snr_cutoff too high or "
-                + f"SNR of ellipse non-finite. SNR of central ellipse: {avg_snr}"
+                + "SNR of ellipse non-finite (e.g., median noise is zero). "
+                + f"SNR of central ellipse: {avg_snr}"
             )
         while avg_snr >= snr_cutoff and np.isfinite(avg_snr):
             print(f"Iter {num + 1}: average SNR = {avg_snr}")
             avg_snr_old = avg_snr
             num += 1
             _append_annulus(num)
-            avg_data, avg_noise, _, _, _, _ = calc_avg_sn_aperture(
+            avg_data, avg_noise = calc_avg_sn_aperture(
                 data, annuli[-1], noise=noise, **kwargs
-            )
+            )[:2]
             avg_snr = avg_data / avg_noise
             if num >= max_snr_annuli:
                 print(f"Maximum number of annuli ({max_snr_annuli}) reached. Stopping")
@@ -838,6 +956,211 @@ def fit_annuli(
     return annuli, a_ins, a_outs, b_ins, b_outs
 
 
+def fit_rectangles(
+    center,
+    pa,
+    min_width,
+    height=None,
+    wcs=None,
+    n_rects=None,
+    snr_cutoff=None,
+    data=None,
+    noise=None,
+    max_snr_rects=50,
+    **kwargs,
+):
+    """
+    Fits and creates `photutils.aperture.RectangularAperture` and `RectangularSandwich`
+    objects given the user's criteria. The user must specify exactly one of: n_annuli or
+    snr_cutoff. This method should only be used for high-inclination objects.
+
+    If creating more than one object (i.e., explicitly through the n_annuli parameter or
+    implicitly through the snr_cutoff parameter), the rectangles will all share the same
+    centre and position angle.
+
+    Note that if snr_cutoff is specified, the input data and noise must also be provided
+    and these 2D arrays should be background-subtracted.
+
+    Here, heights are equivalent to a in fit_annuli(), and widths are equivalent to b in
+    fit_annuli().
+
+    Parameters:
+      center :: 2-tuple of ints/floats or `astropy.coordinates.SkyCoord` object
+        The centre of all ellipses/annuli. If not a SkyCoord object, the center should be
+        in pixel units. If this is a SkyCoord object, the wcs must also be provided
+      pa :: float
+        The position angle of all rectangles/rectangular annuli. The position angle is
+        defined as the angle starting from north and increasing toward the east
+        counter-clockwise
+      min_width :: float or `astropy.units.quantity.Quantity` object
+        The minimum width and separation of all rectangles/rectangular annuli. If a float,
+        min_width should be in pixel units. If an astropy Quantity, the wcs must also be
+        provided. This width will be the minimum length of any rectangle or rectangular
+        aperture portion along the direction defined by the position angle. For example,
+        this is typically the beam size of the radio telescope or the size of the worst
+        (largest) PSF of an optical telescope
+      height :: "min_width", float, or `astropy.units.quantity.Quantity` object or None
+                (optional)
+        The size of the rectangles/rectangular annuli along the axis perpendicular to the
+        direction defined by the position angle. If "min_width", set the heights of the
+        rectangles/annuli equal to min_width. If a float, it should be in pixel units. If
+        an astropy Quantity, wcs must also be provided. If None, automatically extend the
+        rectangle/annulus to the edges of the image (at which point it will likely no
+        longer be a perfect rectangle. N.B. include_bad in kwargs parameter)
+      wcs :: `astropy.wcs.WCS` object (optional)
+        The WCS object corresponding to the center parameter (and typically also the
+        data/noise arrays). Required if center is a SkyCoord object, if min_width not in
+        pixel units, or if height is an astropy Quantity
+      n_rects :: int (optional)
+        The number of rectangles/rectangular annuli to create. If n_rects==1, the function
+        will generate a rectangle. If n_rects>1, the function will generate a central
+        rectangle surrounded by (n_rects-1) rectangular annuli. N.B. the user should
+        specify exactly one parameter: n_annuli or snr_cutoff
+      snr_cutoff :: float (optional)
+        The signal-to-noise ratio (SNR) cutoff for the rectangles/rectangular annuli. If
+        the SNR of the central rectangle or surrounding annuli drop below this value, the
+        function will stop fitting annuli. Must also pass in the data and noise arrays.
+        N.B. the user should specify exactly one parameter: n_annuli or snr_cutoff
+      data, noise :: 2D arrays (optional)
+        The data and noise (uncertainty) arrays that have the same shape. Required for
+        snr_cutoff and ignored for n_rects. These arrays should be background-subtracted
+      max_snr_rects :: int (optional)
+        The maximum number of rectangles/rectangular annuli to fit if using the snr_cutoff
+        parameter. Ignored for n_rects. Once this value is reached, the function will stop
+        generating rectangles/rectangular annuli regardless of other parameters
+      kwargs :: dict (optional)
+        Keyword arguments to be passed to calc_avg_sn_aperture() (i.e., include_bad, func,
+        method, plot). Only relevant if using snr_cutoff. Note that the kwargs:
+        bootstrap_errs, _n_bootstraps, _n_samples, _seed should not be passed or else it
+        may unnecessarily slow down the program
+
+    Returns: rectangles, heights_in, heights_out, widths_in, widths_out
+      rectangles :: 1D array of `photutils.aperture.RectangularAperture` and
+                    `RectangularSandwich` objects
+        The rectangles/rectangular annuli objects. N.B. everything is in pixel units
+      heights_in, heights_out :: 1D arrays of floats
+        The heights of the rectangles/annuli in pixel units perpendicular to the direction
+        defined by the position angle. Note that these arrays are identical to each other
+        except for the first element, where heights_in is equal to zero (i.e., a
+        RectangularAperture instead of a RectangularSandwich)
+      widths_in, widths_out :: 1D arrays of floats
+        The widths of the rectangles/annuli in pixel units along the direction defined by
+        the position angle. Note that a RectangularAperture has a widths_in value of 0
+    """
+
+    def _append_rect(_num):
+        _width_out = (2 * _num + 1) * min_width
+        _width_in = (2 * _num - 1) * min_width if _num > 0 else 0.0
+        widths_out.append(_width_out)
+        widths_in.append(_width_in)
+        heights_out.append(height)
+        if _width_in == 0:
+            rectangle = RectangularAperture(center, _width_out, height, theta=pa)
+        else:
+            rectangle = RectangularSandwich(
+                center, _width_in, _width_out, height, height, theta=pa
+            )
+        rectangles.append(rectangle)
+
+    #
+    # Check some inputs
+    #
+    if isinstance(center, coord.SkyCoord):
+        if wcs is None:
+            raise ValueError("wcs must be provided if center is not in pixel coordinates")
+        center = wcs.world_to_pixel(center)
+    if isinstance(min_width, u.Quantity):
+        if wcs is None:
+            raise ValueError("wcs must be provided if min_width not in pixels")
+        arcsec_per_px = (proj_plane_pixel_scales(wcs.celestial) * u.deg).to(u.arcsec)
+        min_width = np.nanmax((min_width.to(u.arcsec) / arcsec_per_px).value)
+        print("Min width (pixels):", min_width)
+    if height == "min_width":
+        height = min_width
+        print("Height (pixels):", height)
+    elif isinstance(height, u.Quantity):
+        if wcs is None:
+            raise ValueError("wcs must be provided if height not in pixels")
+        arcsec_per_px = (proj_plane_pixel_scales(wcs.celestial) * u.deg).to(u.arcsec)
+        height = np.nanmax((height.to(u.arcsec) / arcsec_per_px).value)
+        print("Height (pixels):", height)
+    elif height is None:
+        if data is not None:
+            heighty, heightx = data.shape
+        elif noise is not None:
+            heighty, heightx = noise.shape
+        else:
+            raise ValueError("data and/or noise must be provided if height is None")
+        # Set height equal to the diagonal of the image (i.e., the longest length)
+        height = np.sqrt(heightx * heightx + heighty * heighty)
+    pa = np.deg2rad((pa + 90) % 360.0)  # PA starts at North and increases Eastward (CCW)
+    #
+    # Make rectangles
+    #
+    rectangles = []
+    widths_in, widths_out, heights_out = [], [], []
+    if n_rects is not None and snr_cutoff is not None:
+        raise ValueError("n_rects and snr_cutoff cannot both be specified")
+    elif n_rects is not None:
+        for num in range(n_rects):
+            _append_rect(num)
+        widths_in, widths_out = np.asarray(widths_in), np.asarray(widths_out)
+        heights_out = np.asarray(heights_out)
+    elif snr_cutoff is not None:
+        if data is None or noise is None:
+            raise ValueError(
+                "Both data and noise must be provided if snr_cutoff is not None"
+            )
+        if snr_cutoff < 0 or ~np.isfinite(snr_cutoff):
+            raise ValueError(f"snr_cutoff ({snr_cutoff}) must be finite and >= 0")
+        if "bootstrap_errs" in kwargs:
+            if kwargs["bootstrap_errs"]:
+                print(
+                    "WARNING: bootstrapping errors in fit_rectangles() will "
+                    + "unnecessarily slow down the program!"
+                )
+        print(
+            "Info: Fitting rectangles according to snr_cutoff. Warning messages (e.g., "
+            + "invalid values, degrees of freedom <= 0, etc.) can safely be ignored"
+        )
+        num = 0
+        _append_rect(num)
+        avg_data, avg_noise = calc_avg_sn_aperture(
+            data, rectangles[-1], noise=noise, **kwargs
+        )[:2]
+        avg_snr = avg_data / avg_noise
+        if avg_snr < snr_cutoff or ~np.isfinite(avg_snr):
+            raise ValueError(
+                "Failed rectangle fitting on 1st attempt. Either snr_cutoff too high or "
+                + "SNR of rectangle non-finite (e.g., median noise is zero). "
+                + f"SNR of central rectangle: {avg_snr}"
+            )
+        while avg_snr >= snr_cutoff and np.isfinite(avg_snr):
+            print(f"Iter {num + 1}: average SNR = {avg_snr}")
+            avg_snr_old = avg_snr
+            num += 1
+            _append_rect(num)
+            avg_data, avg_noise = calc_avg_sn_aperture(
+                data, rectangles[-1], noise=noise, **kwargs
+            )[:2]
+            avg_snr = avg_data / avg_noise
+            if num >= max_snr_rects:
+                print(f"Max number of rectangles ({max_snr_rects}) reached. Stopping")
+                break
+        print("Stopped creating rectangles after", num, "iterations")
+        print("Average SNR of most recent successful fit:", avg_snr_old)
+        print("Average SNR of next rectangle:", avg_snr)
+        # Remove the last element since rectangle not within spec
+        rectangles = np.asarray(rectangles[:-1])
+        widths_in, widths_out = np.asarray(widths_in[:-1]), np.asarray(widths_out[:-1])
+        heights_out = np.asarray(heights_out[:-1])
+    else:
+        raise ValueError("One of n_rects or snr_cutoff must be provided")
+    heights_in = np.copy(heights_out)
+    heights_in[0] = 0.0  # zero because RectangularAperture instead of RectangularSandwich
+    return rectangles, heights_in, heights_out, widths_in, widths_out
+
+
 def calc_radial_profile(
     data,
     center,
@@ -852,13 +1175,14 @@ def calc_radial_profile(
     min_width_ax="minor",
     header=None,
     wcs=None,
-    include_bad=True,
+    include_bad=False,
     method="exact",
     func="median",
     debug_plot=False,
     is_radio=True,
     header_min_width_key="IQMAX",
     header_min_width_unit=u.arcsec,
+    high_i_height=None,
     bootstrap_errs=False,
     n_bootstraps=100,
     n_samples=None,
@@ -868,10 +1192,24 @@ def calc_radial_profile(
     Convenience function for calculating the radial profile of a galaxy from radio or
     other (e.g., optical) data. Data are azimuthally averaged (median or arithmetic mean)
     in ellipses/annuli and the radii are defined to be the artihmetic means of the
-    ellipses/annuli's circularized radii.
+    ellipses/annuli's circularized radii. If it is a high-inclination galaxy, we fit
+    rectangles to the data instead of ellipses/annuli. In this case, each radius is
+    defined to be the midpoint of the rectangle/rectangular cutout along the galaxy's
+    major axis.
 
     Note that these radial profile results (i.e., avg_data, avg_noise, avg_data_err,
     avg_noise_err, std_data, std_noise) are not corrected for inclination.
+
+    Finally, if i >= i_threshold, the radial profile is calculated using rectangles
+    instead of ellipses/annuli. All the keywords, parameters, and return values remain the
+    same, except mentally replace "ellipse/annulus" with "rectangle/rectangular annulus".
+    Regarding return values, a_out will represent the heights of the rectangles
+    (perpendicular to the galaxy's major axis) while b_out will represent the widths
+    (along the galaxy's major axis). b_in will represent the start of the rectangular
+    annulus (looks more like a rectangular sandwich) while a_in will be equal to a_out
+    except for the first element, which will be zero (i.e., an ordinary rectangle). N.B.
+    the i_threshold and high_i_height parameters. Also see the documentation for
+    fit_rectangles().
 
     Parameters:
       data :: 2D array
@@ -892,19 +1230,18 @@ def calc_radial_profile(
         as the data array. If using snr_cutoff, this parameter is required and this array
         should be background-subtracted
       i_threshold :: float (optional)
-        TODO: implement this
-        If i >= i_threshold, use squares/rectangles that have a thickness of min_width
-        (e.g., the radio beam width) aligned with the major axis instead of
-        ellipses/elliptical annuli. The initial square will be centred on the galactic
-        centre (provided via the center parameter). The next "rectangle" region will be
-        composed of two squares appended on the sides of the initial square along the
-        major axis of the galaxy. In other words, the heights of all the rectangles will
-        be min_width and the widths will be 1, 3, 5, ... times min_width. N.B. for widths
-        greater than 1 min_width, only the outer 2 squares will be used for the average
-        calculation. Lastly, n_annuli = max number of rectangles (e.g., n_annuli=3 =>
-        rectangles of widths 1, 3, 5), a_in & b_in are both zero, and a_out & b_out are
-        the widths and heights of the rectangles.
-        ! FIXME: This is super poorly explained.
+        If i >= i_threshold, use rectangles/rectangular annuli that have a thickness of
+        min_width (e.g., the radio beam width) aligned with the major axis instead of
+        ellipses/elliptical annuli. The initial rectangle will be centred on the galactic
+        centre (provided via the center parameter). The next "rectangular sandwich" region
+        will be composed of two rectangles identitcal to the first appended on the sides
+        of the initial rectangle along the major axis of the galaxy. In other words, the
+        heights of all the rectangles will be equal and the widths will be 1, 3, 5, ...
+        times min_width. N.B. for widths greater than 1 min_width, only the outer 2
+        rectangles will be used for the average calculation. Lastly, here is how to
+        (mentally) map the variable names: n_annuli = max number of rectangles (e.g.,
+        n_annuli=3 => rectangles of widths 1, 3, 5), a = heights, b = widths. Also see the
+        high_i_height parameter and the documentation for fit_rectangles()
       n_annuli :: int (optional)
         The number of ellipses/annuli to create. If n_annuli==1, the function will
         generate an ellipse. If n_annuli>1, the function will generate a central ellipse
@@ -968,6 +1305,14 @@ def calc_radial_profile(
         The unit of the min_width parameter from the FITS header (i.e., the unit
         corresponding to header_min_width_key). Only relevant if min_width is None and
         is_radio is False; ignored if is_radio is True. Also see header_min_width_key
+      high_i_height :: "min_width", float, or `astropy.units.quantity.Quantity` object
+                       or None (optional)
+        If i >= i_threshold, this is the size of the rectangles/rectangular annuli along
+        the galaxy's minor axis. If "min_width", set the heights of the rectangles/annuli
+        equal to min_width. If a float, it should be in pixel units. If an astropy
+        Quantity, either header or wcs must also be provided. If None, automatically
+        extend the rectangle/annulus to the edges of the image (at which point it will
+        likely no longer be a perfect rectangle. N.B. the include_bad parameter)
       bootstrap_errs :: bool (optional)
         If True, estimate the uncertainty in the radial profile results (i.e., avg_data &
         avg_noise) using bootstrapping
@@ -983,7 +1328,8 @@ def calc_radial_profile(
         seed. Ignored if bootstrap_errs is False
 
     Returns: (avg_data, avg_noise, avg_data_err, avg_noise_err, std_data, std_noise,
-              radii, annuli, a_ins, a_outs, b_ins, b_outs)
+              data_area_mask, noise_area_mask, radii, annuli, a_ins, a_outs, b_ins,
+              b_outs)
       avg_data :: 1D array
         The average (i.e., median or arithmetic mean) of the data in each ellipse/annulus.
         Not corrected for inclination
@@ -1002,15 +1348,25 @@ def calc_radial_profile(
         is None, then std_noise is None. N.B. if there are many "bad" points in an
         ellipse/annulus (i.e., NaNs or infs) and include_bad is True, then this may not be
         an accurate representation of the standard deviation in that given ellipse/annulus
+      data_area_mask, noise_area_mask :: 1D arrays or None
+        1D arrays containing the included regions of the data and noise arrays per
+        ellipse/annulus. 1 means the pixel is wholly included while 0 and NaNs mean the
+        pixel is wholly excluded. Numbers between 0 and 1 indicate the relative
+        contribution of that pixel (e.g., 0.5 means the pixel is "half-included"). If
+        noise is None, then noise_area is also None
       radii :: 1D array
         The radii of the ellipses/annuli. The radii are defined to be the artihmetic means
-        of the ellipses/annuli's circularized radii
+        of the ellipses/annuli's circularized radii. If i >= i_threshold, then the radii
+        are the midpoints of the rectangles/rectangular annuli along the galaxy's major
+        axis
       a_ins, a_outs :: 1D arrays
-        The inner and outer semi-major axes of the ellipses/annuli. N.B. an ellipse's
-        inner semi-major axis length is 0
+        The inner and outer semi-major axes of the ellipses/annuli in pixel units. N.B. an
+        ellipse's inner semi-major axis length is 0. If i >= i_threshold, these are the
+        heights of the rectangles in the galaxy's minor axis direction
       b_ins, b_outs :: 1D arrays
-        The inner and outer semi-minor axes of the ellipses/annuli. N.B. an ellipse's
-        inner semi-minor axis length is 0
+        The inner and outer semi-minor axes of the ellipses/annuli in pixel units. N.B. an
+        ellipse's inner semi-minor axis length is 0. If >= i_threshold, these are the
+        widths of the rectangles in the galaxy's major axis direction
     """
     #
     # Check inputs
@@ -1019,6 +1375,17 @@ def calc_radial_profile(
         print("Info: using provided WCS instead of converting header to WCS")
     elif wcs is None and header is not None:
         wcs = WCS(header)
+    if i < 0 or i > 90 or not np.isfinite(i):
+        raise ValueError("i must be a finite number between 0 and 90 deg")
+    if i_threshold is not None:
+        if i_threshold < 0 or i_threshold > 90 or not np.isfinite(i_threshold):
+            raise ValueError("i_threshold must be a finite number between 0 and 90 deg")
+    if pa < 0 or pa > 360 or not np.isfinite(pa):
+        raise ValueError("Position angle must be a finite number between 0 and 360 deg")
+    if n_annuli is not None and snr_cutoff is not None:
+        raise ValueError("n_annuli and snr_cutoff cannot both be specified")
+    elif n_annuli is None and snr_cutoff is None:
+        raise ValueError("Exactly one of n_annuli or snr_cutoff must be specified")
     #
     # Calculate minimum width of ellipses/annuli if necessary
     #
@@ -1045,34 +1412,58 @@ def calc_radial_profile(
     #
     # Generate ellipses/annuli, calculate radii and radial profile quantities
     #
-    annuli, a_ins, a_outs, b_ins, b_outs = fit_annuli(
-        center,
-        i,
-        pa,
-        min_width,
-        min_width_ax=min_width_ax,
-        i_threshold=i_threshold,
-        wcs=wcs,
-        n_annuli=n_annuli,
-        snr_cutoff=snr_cutoff,
-        data=data,
-        noise=noise,
-        max_snr_annuli=max_snr_annuli,
-        include_bad=include_bad,
-        method=method,
-        func=func,
-        plot=False,
-        bootstrap_errs=False,  # unnecessary at this stage
-    )
-    if i_threshold is not None:
-        if i_threshold < 0 or ~np.isfinite(i_threshold):
-            raise ValueError("i_threshold must be a finite number >= 0")
-        if i >= i_threshold:
-            # Get circularized radius of a rectangle. r_circ = sqrt(w*h)/pi
-            rtc_factor = np.pi * np.pi  # rectangle to circle factor
-            radii = calc_radius(a_outs, a_outs / rtc_factor, b_ins, b_outs / rtc_factor)
+    if i_threshold is not None and i >= i_threshold:
+        print(
+            "Info: Inclination greater than i_threshold. "
+            + "Fitting rectangles along major axis instead of ellipses/annuli"
+        )
+        if high_i_height is None and include_bad:
+            # N.B. high_i_height is None + include_bad == True does not affect SNR since
+            # areas cancel out. BUT it does affect the individual avg signal and avg noise
+            # values and may cause snr_threshold to fail since median noise may be zero
+            print(
+                "\nWARNING: fitting rectangles to edges of image while including "
+                + "NaNs/infs as zeros\n"
+            )
+        annuli, a_ins, a_outs, b_ins, b_outs = fit_rectangles(
+            center,
+            pa,
+            min_width,
+            height=high_i_height,
+            wcs=wcs,
+            n_rects=n_annuli,
+            snr_cutoff=snr_cutoff,
+            data=data,
+            noise=noise,
+            max_snr_rects=max_snr_annuli,
+            include_bad=include_bad,
+            method=method,
+            func=func,
+            plot=False,  # unnecessary at this stage
+            bootstrap_errs=False,  # unnecessary at this stage
+        )
+        is_rectangle = True
     else:
-        radii = calc_radius(a_ins, a_outs, b_ins, b_outs)
+        annuli, a_ins, a_outs, b_ins, b_outs = fit_annuli(
+            center,
+            i,
+            pa,
+            min_width,
+            min_width_ax=min_width_ax,
+            wcs=wcs,
+            n_annuli=n_annuli,
+            snr_cutoff=snr_cutoff,
+            data=data,
+            noise=noise,
+            max_snr_annuli=max_snr_annuli,
+            include_bad=include_bad,
+            method=method,
+            func=func,
+            plot=False,  # unnecessary at this stage
+            bootstrap_errs=False,  # unnecessary at this stage
+        )
+        is_rectangle = False
+    radii = calc_radius(b_ins, b_outs, a_ins, a_outs, is_rectangle=is_rectangle)
     (
         avg_data,
         avg_noise,
@@ -1080,6 +1471,8 @@ def calc_radial_profile(
         avg_noise_err,
         std_data,
         std_noise,
+        data_area_mask,
+        noise_area_mask,
     ) = calc_avg_sn_aperture_multi(
         data,
         annuli,
@@ -1100,6 +1493,8 @@ def calc_radial_profile(
         avg_noise_err,
         std_data,
         std_noise,
+        data_area_mask,
+        noise_area_mask,
         radii,
         annuli,
         a_ins,
