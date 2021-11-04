@@ -24,14 +24,14 @@ Attempt to speed up Voronoi binning. Does not support sn_func.
 
 Isaac Cheng - November 2021
 """
-from time import perf_counter as clock
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import distance, cKDTree
 from scipy import ndimage
 
 from numba import njit
-# from numba_kdtree import KDTree
+from numba_kdtree import KDTree as numba_cKDTree
 
 #----------------------------------------------------------------------------
 
@@ -86,18 +86,38 @@ def voronoi_tessellation(x, y, xnode, ynode, scale):
     Computes (Weighted) Voronoi Tessellation of the pixels grid
 
     """
+    # print("x.dtype, y.dtype, type(xnode), type(ynode), type(scale)")
+    # print(x.dtype, y.dtype, type(xnode), type(ynode), type(scale))
+    # print(x.dtype, y.dtype, xnode.dtype, ynode.dtype, scale)
+    scale = np.copy(scale)
+
+    @njit("(i8[:])(f8[:], f8[:], f8[:], f8[:])")
+    def _numba_classe(_x, _y, _xnode, _ynode):
+        _classe = np.zeros(_x.size, dtype=np.int64)
+        for j, xj, yj in zip(range(_x.size), _x, _y):
+            xdiff = xj - _xnode
+            ydiff = yj - _ynode
+            _classe[j] = np.argmin((xdiff*xdiff + ydiff*ydiff)/(scale*scale))
+        return _classe
+
     if scale[0] == 1:  # non-weighted VT
-        tree = cKDTree(np.column_stack([xnode, ynode]))  # * cKDTree -> numba_kdtree
+        tree = numba_cKDTree(np.column_stack([xnode, ynode]), leafsize=16)  # * cKDTree -> numba_cKDTree
         classe = tree.query(np.column_stack([x, y]))[1]
     else:
         if x.size < 1e4:
-            classe = np.argmin(((x[:, None] - xnode)*(x[:, None] - xnode) + (y[:, None] - ynode)*(y[:, None] - ynode))/(scale*scale), axis=1)
+            xdiff = x[:, None] - xnode
+            ydiff = y[:, None] - ynode
+            classe = np.argmin((xdiff*xdiff + ydiff*ydiff)/(scale*scale), axis=1)
         else:  # use for loop to reduce memory usage
-            classe = np.zeros(x.size, dtype=int)
-            for j, (xj, yj) in enumerate(zip(x, y)):
-                classe[j] = np.argmin(((xj - xnode)*(xj - xnode) + (yj - ynode)*(yj - ynode))/(scale*scale))
+            # classe = np.zeros(x.size, dtype=np.int64)
+            # for j, (xj, yj) in enumerate(zip(x, y)):
+            #     xdiff = xj - xnode
+            #     ydiff = yj - ynode
+            #     classe[j] = np.argmin((xdiff*xdiff + ydiff*ydiff)/(scale*scale))
+            classe = _numba_classe(x, y, xnode, ynode)
 
-    return classe
+    # return classe
+    return classe.flatten()  # flatten bc of numba_cKDTree
 
 #----------------------------------------------------------------------
 
@@ -122,56 +142,9 @@ def _accretion(x, y, signal, noise, targetSN, pixelsize, quiet):
     """
     Implements steps (i)-(v) in section 5.1 of Cappellari & Copin (2003)
 
+    Try to minimize numpy usage?! Nevermind I guess...
+
     """
-
-    # @njit("(f8)(i8[:], f8[:], f8[:])")
-    # def _accretion_sn_func(index, signal, noise):
-    #     """
-    #     Default function to calculate the S/N of a bin with spaxels "index".
-
-    #     The Voronoi binning algorithm does not require this function to have a
-    #     specific form and this default one can be changed by the user if needed
-    #     by passing a different function as::
-
-    #         voronoi_2d_binning(..., sn_func=sn_func)
-
-    #     The S/N returned by sn_func() does not need to be an analytic
-    #     function of S and N.
-
-    #     There is also no need for sn_func() to return the actual S/N.
-    #     Instead sn_func() could return any quantity the user needs to equalize.
-
-    #     For example sn_func() could be a procedure which uses ppxf to measure
-    #     the velocity dispersion from the coadded spectrum of spaxels "index"
-    #     and returns the relative error in the dispersion.
-
-    #     Of course an analytic approximation of S/N, like the one below,
-    #     speeds up the calculation.
-
-    #     :param index: integer vector of length N containing the indices of
-    #         the spaxels for which the combined S/N has to be returned.
-    #         The indices refer to elements of the vectors signal and noise.
-    #     :param signal: vector of length M>N with the signal of all spaxels.
-    #     :param noise: vector of length M>N with the noise of all spaxels.
-    #     :return: scalar S/N or another quantity that needs to be equalized.
-
-    #     """
-    #     sn = np.sum(signal[index])/np.sqrt(np.sum(noise[index]*noise[index]))
-    #     return  sn
-
-    # @njit("(f8)(f8[:], f8[:], f8)")
-    # def _accretion_roundness(x, y, pixelSize):
-    #     """
-    #     Implements equation (5) of Cappellari & Copin (2003)
-
-    #     """
-    #     n = x.size
-    #     equivalentRadius = np.sqrt(n/np.pi)*pixelSize
-    #     xBar, yBar = np.mean(x), np.mean(y)  # Geometric centroid here!
-    #     maxDistance = np.sqrt(np.max((x - xBar)*(x - xBar) + (y - yBar)*(y - yBar)))
-    #     roundness = maxDistance/equivalentRadius - 1.
-    #     return roundness
-
     n = x.size
     classe = np.zeros(n, dtype=np.int64)  # will contain the bin number of each given pixel
     good = np.zeros(n, dtype=np.int64)   # will contain 1 if the bin has been accepted as good
@@ -189,31 +162,38 @@ def _accretion(x, y, signal, noise, targetSN, pixelsize, quiet):
     #         raise ValueError("Dataset is large: Provide `pixelsize`")
     # pixelsize = float(pixelsize)  # for numba
 
-    currentBin = np.argmax(signal/noise)  # Start from the pixel with highest S/N
+    init_currentBin = np.argmax(signal/noise)  # Start from the pixel with highest S/N
     # currentBin = np.atleast_1d(np.argmax(signal/noise)).astype(np.int64)  # Start from the pixel with highest S/N
     # print(np.sum(signal[currentBin]))
     # SN = _accretion_sn_func(np.atleast_1d(currentBin), signal, noise)
-    SN = signal[currentBin]/np.sqrt(noise[currentBin]*noise[currentBin])  # don't need np.sum()
+    SN = signal[init_currentBin]/np.sqrt(noise[init_currentBin]*noise[init_currentBin])  # don't need np.sum()
 
     # Rough estimate of the expected final bins number.
     # This value is only used to give an idea of the expected
     # remaining computation time when binning very big dataset.
     #
     w = signal/noise < targetSN
-    maxnum = int(np.sum((signal[w]/noise[w])*(signal[w]/noise[w]))/(targetSN*targetSN) + np.sum(~w))
+    signal_noise_w = signal[w]/noise[w]
+    maxnum = int(np.sum(signal_noise_w*signal_noise_w)/(targetSN*targetSN) + np.sum(~w))
+
+    currentBin = np.array([init_currentBin], dtype=np.int64)  # for numba
 
     # The first bin will be assigned CLASS = 1
     # With N pixels there will be at most N bins
     #
+    # myzeroarray = np.array([0], dtype=np.int64)  # for numba. Not necessary?
+    div_by_pi = 1 / np.pi  # for numba optimization ?
     for ind in range(1, n+1):
-        print("index", ind)
-        print("currentBin", currentBin)
 
         if not quiet:
             print(ind, ' / ', maxnum)
 
-        classe[currentBin] = np.int64(ind)  # Here currentBin is still made of one pixel
-        xBar, yBar = x[currentBin], y[currentBin]    # Centroid of one pixels
+        classe[currentBin] = ind  # Here currentBin is still made of one pixel
+        # assert currentBin.size == 1  # for numba
+        # xBar, yBar = float(x[currentBin]), float(y[currentBin])    # Centroid of one pixels
+        xBar, yBar = np.mean(x[currentBin]), np.mean(y[currentBin])    # Centroid of one pixels
+        # (re: above) Just using np.mean so value is float64 (for numba). Better than
+        # casting to array at the end of each for loop
 
         while True:
 
@@ -222,36 +202,35 @@ def _accretion(x, y, signal, noise, targetSN, pixelsize, quiet):
 
             # Find the unbinned pixel closest to the centroid of the current bin
             #
-            # unBinned = np.flatnonzero(classe == np.array([0], dtype=np.int64))
             unBinned = np.flatnonzero(classe == 0)
-            # print("xBar, xBar.shape, x[unBinned].shape", xBar, xBar.shape, x[unBinned].shape)
-            k = np.argmin((x[unBinned] - xBar)*(x[unBinned] - xBar) + (y[unBinned] - yBar)*(y[unBinned] - yBar))
+            k_xdiff = x[unBinned] - xBar
+            k_ydiff = y[unBinned] - yBar
+            k = np.argmin(k_xdiff * k_xdiff + k_ydiff * k_ydiff)
 
             # (1) Find the distance from the closest pixel to the current bin
             #
-            pre_minDist = (x[currentBin] - x[unBinned[k]])*(x[currentBin] - x[unBinned[k]]) + (y[currentBin] - y[unBinned[k]])*(y[currentBin] - y[unBinned[k]])
-            minDist = np.min(np.asarray(pre_minDist, dtype=np.float64))
+            minDist_xdiff = x[currentBin] - x[unBinned[k]]
+            minDist_ydiff = y[currentBin] - y[unBinned[k]]
+            minDist = np.min(minDist_xdiff*minDist_xdiff + minDist_ydiff*minDist_ydiff)
 
             # (2) Estimate the `roundness' of the POSSIBLE new bin
             #
             nextBin = np.append(currentBin, unBinned[k])
-            # print("nextBin type", type(nextBin))
-            # print("nextBin dtype", nextBin.dtype)
             # roundness = _accretion_roundness(x[nextBin], y[nextBin], pixelsize)
             roundness_x, roundness_y = x[nextBin], y[nextBin]
-            roundness_n = x[nextBin].size
-            roundness_equivalentRadius = np.sqrt(roundness_n/np.pi)*pixelsize
-            roundness_xBar, roundness_yBar = np.mean(roundness_x), np.mean(roundness_y)  # Geometric centroid here!
-            roundness_maxDistance = np.sqrt(np.max((roundness_x - roundness_xBar)*(roundness_x - roundness_xBar) + (roundness_y - roundness_yBar)*(roundness_y - roundness_yBar)))
+            roundness_equivalentRadius = np.sqrt(roundness_x.size*div_by_pi)*pixelsize
+            roundness_xdiff = roundness_x - np.mean(roundness_x)
+            roundness_ydiff = roundness_y - np.mean(roundness_y)
+            roundness_maxDistance = np.sqrt(np.max(roundness_xdiff*roundness_xdiff + roundness_ydiff*roundness_ydiff))
             roundness = roundness_maxDistance/roundness_equivalentRadius - 1.0
 
             # (3) Compute the S/N one would obtain by adding
             # the CANDIDATE pixel to the current bin
             #
-            # print("SN type", type(SN))
             SNOld = SN
             # SN = _accretion_sn_func(nextBin, signal, noise)
-            SN = np.sum(signal[nextBin])/np.sqrt(np.sum(noise[nextBin]*noise[nextBin]))
+            noise_nextBin = noise[nextBin]
+            SN = np.sum(signal[nextBin])/np.sqrt(np.sum(noise_nextBin*noise_nextBin))
 
             # Test whether (1) the CANDIDATE pixel is connected to the
             # current bin, (2) whether the POSSIBLE new bin is round enough
@@ -267,37 +246,41 @@ def _accretion(x, y, signal, noise, targetSN, pixelsize, quiet):
             # pixel, add it to the current bin, and continue accreting pixels
             #
             classe[unBinned[k]] = ind
-            # currentBin = nextBin  # ! CONTINUE DEBUGGING HERE
-            # # * Addded code start
-            # if np.random.random() < 0.5:
-            #     break
-            # # * Added code end
+            currentBin = nextBin
 
             # Update the centroid of the current bin
             #
-            # xBar, yBar = np.mean(x[currentBin]), np.mean(y[currentBin])
-            # print("xBar, yBar:", xBar, yBar)
+            xBar, yBar = np.mean(x[currentBin]), np.mean(y[currentBin])
+            # xBar = np.array([np.mean(x[currentBin])], dtype=np.float64)
+            # yBar = np.array([np.mean(y[currentBin])], dtype=np.float64)
 
-    #     # Get the centroid of all the binned pixels
-    #     #
-    #     binned = classe > 0
-    #     if np.all(binned):
-    #         break  # Stop if all pixels are binned
-    #     xBar, yBar = np.mean(x[binned]), np.mean(y[binned])
+        # Get the centroid of all the binned pixels
+        #
+        binned = classe > 0
+        if np.all(binned):
+            break  # Stop if all pixels are binned
+        xBar, yBar = np.mean(x[binned]), np.mean(y[binned])
+        # xBar = np.array([np.mean(x[binned])], dtype=np.float64)
+        # yBar = np.array([np.mean(y[binned])], dtype=np.float64)
 
-    #     # Find the closest unbinned pixel to the centroid of all
-    #     # the binned pixels, and start a new bin from that pixel.
-    #     #
-    #     unBinned = np.flatnonzero(classe == 0)
-    #     unBinned_SN = np.sum(signal[unBinned])/np.sqrt(np.sum(noise[unBinned]*noise[unBinned]))
-    #     if unBinned_SN < targetSN:
-    #         break  # Stops if the remaining pixels do not have enough capacity
-    #     k = np.argmin((x[unBinned] - xBar)*(x[unBinned] - xBar) + (y[unBinned] - yBar)*(y[unBinned] - yBar))
-    #     currentBin = unBinned[k]    # The bin is initially made of one pixel
-    #     # SN = _accretion_sn_func(np.atleast_1d(currentBin), signal, noise)
-    #     SN = np.sum(signal[currentBin])/np.sqrt(np.sum(noise[currentBin]*noise[currentBin]))
+        # Find the closest unbinned pixel to the centroid of all
+        # the binned pixels, and start a new bin from that pixel.
+        #
+        unBinned = np.flatnonzero(classe == 0)
+        # unBinned = np.flatnonzero(classe == myzeroarray)
+        noise_unBinned = noise[unBinned]
+        unBinned_SN = np.sum(signal[unBinned])/np.sqrt(np.sum(noise_unBinned*noise_unBinned))
+        if unBinned_SN < targetSN:
+            break  # Stops if the remaining pixels do not have enough capacity
+        xdiff_unBinned = x[unBinned] - xBar
+        ydiff_unBinned = y[unBinned] - yBar
+        k = np.argmin(xdiff_unBinned*xdiff_unBinned + ydiff_unBinned*ydiff_unBinned)
+        currentBin = np.array([unBinned[k]], dtype=np.int64)    # The bin is initially made of one pixel
+        # # SN = _accretion_sn_func(np.atleast_1d(currentBin), signal, noise)
+        noise_currentBin = noise[currentBin]
+        SN = np.sum(signal[currentBin])/np.sqrt(np.sum(noise_currentBin*noise_currentBin))
 
-    # classe *= good  # Set to zero all bins that did not reach the target S/N
+    classe *= good  # Set to zero all bins that did not reach the target S/N
 
     return classe
 
@@ -649,9 +632,6 @@ def voronoi_2d_binning(x, y, signal, noise, targetSN, cvt=True,
     if np.min(signal/noise) > targetSN:
         raise ValueError('All pixels have enough S/N and binning is not needed')
 
-    t1 = clock()
-    if not quiet:
-        print('Bin-accretion...')
     #
     # For each point, find the distance to all other points and select the minimum.
     # This is a robust but slow way of determining the pixel size of unbinned data.
@@ -665,16 +645,38 @@ def voronoi_2d_binning(x, y, signal, noise, targetSN, cvt=True,
     targetSN = float(targetSN)  # for numba
     # print(type(x), type(y), type(signal), type(noise), type(targetSN), type(pixelsize), type(quiet))
     # print(x.dtype, y.dtype, signal.dtype, noise.dtype, type(targetSN), type(pixelsize), type(quiet))
+    #
+    # JIT-compile functions
+    #
+    print("Compiling bin accretion algorithm")
+    initx = np.arange(1, 3).astype(np.float64)
+    inity = np.arange(1, 3).astype(np.float64)
+    initx, inity = np.meshgrid(initx, inity)
+    initx = initx.astype(np.float64)
+    inity = inity.astype(np.float64)
+    initsig = np.ones(initx.size, dtype=np.float64) * 2.
+    initnoise = np.ones(initx.size, dtype=np.float64)
+    initclasse = _accretion(initx.flatten(), inity.flatten(), initsig, initnoise, 3., 1., True)
+    print("Compiling voronoi tesselation algorithm")
+    _ = _reassign_bad_bins(initclasse, initx.flatten(), inity.flatten())
+    #
+    # Actually run bin accretion algorithm with user data
+    #
+    if not quiet:
+        print('Bin-accretion...')
+    t1 = time.time()
     classe = _accretion(
         x, y, signal, noise, targetSN, pixelsize, quiet)  # do not pass sn_func
-    # print(classe.dtype)
+    t11 = time.time()
+    print(f"Bin-accretion done in {(t11 - t1)/60:.2f} minutes")
+
     if not quiet:
         print(np.max(classe), ' initial bins.')
         print('Reassign bad bins...')
     xnode, ynode = _reassign_bad_bins(classe, x, y)
     if not quiet:
         print(xnode.size, ' good bins.')
-    t2 = clock()
+    t2 = time.time()
     if cvt:
         if not quiet:
             print('Modified Lloyd algorithm...')
@@ -687,12 +689,13 @@ def voronoi_2d_binning(x, y, signal, noise, targetSN, cvt=True,
     classe, xBar, yBar, sn, area = _compute_useful_bin_quantities(
         x, y, signal, noise, xnode, ynode, scale, sn_func)
     single = area == 1
-    t3 = clock()
+    t3 = time.time()
     if not quiet:
         print('Unbinned pixels: ', np.sum(single), ' / ', x.size)
         print('Fractional S/N scatter (%):', np.std(sn[~single] - targetSN, ddof=1)/targetSN*100)
         print('Elapsed time accretion: %.2f seconds' % (t2 - t1))
         print('Elapsed time optimization: %.2f seconds' % (t3 - t2))
+    print(f"It took {(t2 - t1)/60:.2f} minutes to finish Voronoi-binning!")
 
     if plot:
         plt.clf()
@@ -715,6 +718,7 @@ def voronoi_2d_binning(x, y, signal, noise, targetSN, cvt=True,
         plt.axis([np.min(rad), np.max(rad), 0, np.max(sn)*1.05])  # x0, x1, y0, y1
         plt.axhline(targetSN)
         plt.legend()
+        plt.show()
 
     return classe, xnode, ynode, xBar, yBar, sn, area, scale
 
