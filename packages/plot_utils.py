@@ -12,9 +12,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 
-# My own packages
-# import radial_profile_utils as rpu
-
 
 def add_scalebar(
     ax,
@@ -135,8 +132,130 @@ def add_beam(ax, header, xy=(0, 0), **kwargs):
     return ax.add_artist(beam)
 
 
-def add_annuli(ax, annuli, **kwargs):
+def add_scalebeam(
+    ax,
+    header,
+    loc="lower left",
+    pad=1.25,
+    frameon=False,
+    fc="none",
+    ec="k",
+    lw=1,
+    **kwargs,
+):
     """
+    Adds an ellipse to the given ax to show the radio beam size derived from the FITS
+    header. Unlike the manual positioning of add_beam(), the positioning here is
+    determined by the loc parameter.
+
+    Requires my radial_profile_utils package.
+
+    Parameters:
+      ax :: `matplotlib.axes._subplots.AxesSubplot` object
+        The axis on which to add the beam
+      header :: `astropy.io.fits.Header` object
+        The header of the image
+      loc :: str or int (optional)
+        The location of the ellipse. See
+        `mpl_toolkits.axes_grid1.anchored_artists.AnchoredEllipse` for more information
+      pad :: float (optional)
+        Padding around the ellipse in fractions of the font size
+      frameon :: bool (optional)
+        If True, draw a box around the ellipse
+      fc :: str (optional)
+        The face colour of the ellipse
+      ec :: str (optional)
+        The edge colour of the ellipse
+      lw :: float (optional)
+        The line width of the ellipse
+      **kwargs :: dict (optional)
+        Keyworded arguments to pass to `matplotlib.offsetbox.AnchoredOffsetbox`
+
+    Returns: ax.add_artist(Beam)
+        ax.add_artist(Beam) :: `mpl_toolkits.axes_grid1.anchored_artists.AnchoredEllipse`
+          The beam object added on the given axis
+    """
+    from mpl_toolkits.axes_grid1.anchored_artists import AnchoredEllipse
+    from radial_profile_utils import get_beam_size_px
+
+    co_beam_major, co_beam_minor, co_beam_pa = get_beam_size_px(header)
+    Beam = AnchoredEllipse(
+        ax.transData,
+        width=co_beam_minor,
+        height=co_beam_major,
+        angle=(co_beam_pa - 90) % 360.0,  # PA is 0 deg at North & increases CCW
+        loc=loc,
+        pad=pad,
+        frameon=frameon,
+        **kwargs,
+    )
+    Beam.ellipse.set_facecolor(fc)
+    Beam.ellipse.set_edgecolor(ec)
+    Beam.ellipse.set_linewidth(lw)
+    ax.add_artist(Beam)
+
+
+def rotate_ccw(x, y, theta, origin=(0, 0)):
+    """
+    Rotate a point/array counter-clockwise by theta radians about the origin. Theta starts
+    at zero on the positive x-axis (right) and increases toward the positive y-axis (up).
+
+    Parameters:
+      x, y :: float or array-like
+        The x- and y-coordinates of the point/array to rotate
+      theta :: float or array-like
+        The angle of rotation in radians
+      origin :: 2-tuple of floats or array-like with shape (2, shape(x)) (optional)
+        The point about which to rotate. Default is (0, 0). If x and y are arrays, this
+        should be a 2D array where the first index (row) is the x-coordinate origin and
+        the second index (column) is the y-coordinate of the origin.
+
+    Returns: x_rot, y_rot
+      x_rot, y_rot :: float or array-like
+        The rotated x- and y-coordinates of the point/array
+    """
+    xnew = x - origin[0]
+    ynew = y - origin[1]
+    xnew2 = np.cos(theta) * xnew - np.sin(theta) * ynew
+    ynew2 = np.sin(theta) * xnew + np.cos(theta) * ynew
+    x_rot = xnew2 + origin[0]
+    y_rot = ynew2 + origin[1]
+    return x_rot, y_rot
+
+
+def rotate_cw(x, y, theta, origin=(0, 0)):
+    """
+    Rotate a point/array clockwise by theta radians about the origin. Theta starts at zero
+    on the positive x-axis (right) and increases toward the negative y-axis (down).
+
+    Parameters:
+      x, y :: float or array-like
+        The x- and y-coordinates of the point/array to rotate
+      theta :: float or array-like
+        The angle of rotation in radians
+      origin :: 2-tuple of floats or array-like with shape (2, shape(x)) (optional)
+        The point about which to rotate. Default is (0, 0). If x and y are arrays, this
+        should be a 2D array where the first index (row) is the x-coordinate origin and
+        the second index (column) is the y-coordinate of the origin.
+
+    Returns: x_rot, y_rot
+      x_rot, y_rot :: float or array-like
+        The rotated x- and y-coordinates of the point/array
+    """
+    xnew = x - origin[0]
+    ynew = y - origin[1]
+    xnew2 = np.cos(theta) * xnew + np.sin(theta) * ynew
+    ynew2 = -np.sin(theta) * xnew + np.cos(theta) * ynew
+    x_rot = xnew2 + origin[0]
+    y_rot = ynew2 + origin[1]
+    return x_rot, y_rot
+
+
+def add_annuli_old(ax, annuli, **kwargs):
+    """
+    DEPRECATED. Does not support plotting high-inclination galaxies.
+    See add_annuli() instead!
+
     Adds annuli to the given ax.
 
     Parameters:
@@ -144,6 +263,7 @@ def add_annuli(ax, annuli, **kwargs):
         The axis on which to add the beam
       annuli :: array-like containing `photutils.aperture.EllipticalAperture` and/or
                 `photutils.aperture.EllipticalAnnulus` objects
+        The annuli to plot on the given axis
       kwargs :: dict (optional)
         Keyworded arguments to pass to `matplotlib.patches.Ellipse`. If empty, will set
         the following properties: {"ls": "-", "edgecolor": "tab:cyan", "fc": "None",
@@ -174,6 +294,160 @@ def add_annuli(ax, annuli, **kwargs):
         )
         ax.add_patch(ellipse)
     return None
+
+
+def add_annuli(ax, annuli, high_i=False, alpha_coeff=None, **kwargs):
+    """
+    Adds annuli to the given ax. Supports plotting high-inclination galaxies. Remember to
+    set ax.set_xlim(0, data.shape[1]) and ax.set_ylim(0, data.shape[0]) after plotting.
+
+    Parameters:
+      ax :: `matplotlib.axes._subplots.AxesSubplot` object
+        The axis on which to add the beam
+      annuli :: array-like containing `photutils.aperture.EllipticalAperture`,
+                `photutils.aperture.EllipticalAnnulus`,
+                `photutils.aperture.RectangularAperture`,
+                and/or `photutils.aperture.RectangularAnnulus`/`RectangularSandwich`
+                objects
+        The annuli to plot on the given axis
+      high_i :: bool (optional)
+        If True, plot rectangles/rectangular annuli (for high-inclination galaxies)
+        instead of ellipses/elliptical annuli
+      alpha_coeff :: float (optional)
+        The pre-factor to multiply with (num + 1) / len(annuli). That is, the alpha-value
+        of each annulus will be alpha_coeff * (num + 1) / len(annuli). If None, set alpha
+        to 0.3 for low-i galaxies and 0.1 for high-i galaxies
+      kwargs :: dict (optional)
+        Keyworded arguments to pass to `matplotlib.patches.Ellipse` or
+        `matplotlib.patches.Rectangle`. If empty, will set the following properties:
+        {"ls": "-", "edgecolor": "k", "fc": "k", "lw": 1, "zorder": 2}
+
+    Returns: None
+    """
+    if kwargs == {}:
+        kwargs = {"ls": "-", "edgecolor": "k", "fc": "k", "lw": 1, "zorder": 2}
+    if high_i:  # high inclination galaxies
+        alpha_coeff = 0.1 if alpha_coeff is None else alpha_coeff
+        for num, rectangle in enumerate(annuli[::-1]):  # plot rectangles outside-in
+            try:
+                # RectangularAnnulus/RectangularSandwich attributes
+                width = rectangle.w_out
+                height = rectangle.h_out
+            except AttributeError:
+                # RectangularAperture attributes
+                width = rectangle.w
+                height = rectangle.h
+            xy = (rectangle.positions[0] - height / 2, rectangle.positions[1] + width / 2)
+            xy = rotate_ccw(*xy, rectangle.theta + np.pi / 2, origin=rectangle.positions)
+            rect = mpl.patches.Rectangle(
+                xy=xy,
+                width=width,
+                height=height,
+                angle=np.rad2deg(rectangle.theta) % 360.0,  # same convention as PA
+                alpha=alpha_coeff * (num + 1) / len(annuli),
+                **kwargs,
+            )
+            ax.add_patch(rect)
+    else:  # low-inclination galaxies
+        alpha_coeff = 0.3 if alpha_coeff is None else alpha_coeff
+        for num, annulus in enumerate(annuli[::-1]):  # plot annuli outside-in
+            try:
+                # EllipticalAnnulus attributes
+                width = annulus.b_out
+                height = annulus.a_out
+            except AttributeError:
+                # EllipticalAperture attributes
+                width = annulus.b
+                height = annulus.a
+            ellipse = mpl.patches.Ellipse(
+                xy=annulus.positions,
+                width=width * 2,  # full major/minor axis
+                height=height * 2,  # full major/minor axis
+                angle=(np.rad2deg(annulus.theta) - 90) % 360.0,  # PA is 0 deg at North
+                alpha=alpha_coeff * (num + 1) / len(annuli),
+                **kwargs,
+            )
+            ax.add_patch(ellipse)
+
+
+def add_annuli_RadialProfile(ax, RadialProfile, alpha_coeff=None, **kwargs):
+    """
+    Convenience wrapper for adding annuli to the given ax directly from a RadialProfile
+    object. Supports plotting high-inclination galaxies. Remember to set ax.set_xlim(0,
+    data.shape[1]) and ax.set_ylim(0, data.shape[0]) after plotting.
+
+    Parameters:
+      ax :: `matplotlib.axes._subplots.AxesSubplot` object
+        The axis on which to add the beam
+      RadialProfile :: `RadialProfile` object
+        The RadialProfile object used to generate the annuli to plot on the given axis
+      alpha_coeff :: float (optional)
+        The pre-factor to multiply with (num + 1) / len(annuli). That is, the alpha-value
+        of each annulus will be alpha_coeff * (num + 1) / len(annuli). If None, set alpha
+        to 0.3 for low-i galaxies and 0.1 for high-i galaxies
+      kwargs :: dict (optional)
+        Keyworded arguments to pass to `matplotlib.patches.Ellipse` or
+        `matplotlib.patches.Rectangle`. If empty, will set the following properties:
+        {"ls": "-", "edgecolor": "k", "fc": "k", "lw": 1, "zorder": 2}
+
+    Returns: None
+    """
+    high_i = (
+        RadialProfile.rp_options["i_threshold"] is not None
+        and RadialProfile.i >= RadialProfile.rp_options["i_threshold"]
+    )
+    return add_annuli(
+        ax, RadialProfile.annuli, high_i=high_i, alpha_coeff=alpha_coeff, **kwargs
+    )
+    # if kwargs == {}:
+    #     kwargs = {"ls": "-", "edgecolor": "k", "fc": "k", "lw": 1, "zorder": 2}
+    # if (
+    #     RadialProfile.rp_options["i_threshold"] is not None
+    #     and RadialProfile.i >= RadialProfile.rp_options["i_threshold"]
+    # ):  # high inclination galaxies
+    #     alpha_coeff = 0.1 if alpha_coeff is None else alpha_coeff
+    #     # Plot rectangles outside-in
+    #     for num, rectangle in enumerate(RadialProfile.annuli[::-1]):
+    #         try:
+    #             # RectangularAnnulus/RectangularSandwich attributes
+    #             width = rectangle.w_out
+    #             height = rectangle.h_out
+    #         except AttributeError:
+    #             # RectangularAperture attributes
+    #             width = rectangle.w
+    #             height = rectangle.h
+    #         xy = (rectangle.positions[0] - height / 2, rectangle.positions[1] + width / 2)
+    #         xy = rotate_ccw(*xy, rectangle.theta + np.pi / 2, origin=rectangle.positions)
+    #         rect = mpl.patches.Rectangle(
+    #             xy=xy,
+    #             width=width,
+    #             height=height,
+    #             angle=np.rad2deg(rectangle.theta) % 360.0,  # same convention as PA
+    #             alpha=alpha_coeff * (num + 1) / len(RadialProfile.annuli),
+    #             **kwargs,
+    #         )
+    #         ax.add_patch(rect)
+    # else:  # low-inclination galaxies
+    #     alpha_coeff = 0.3 if alpha_coeff is None else alpha_coeff
+    #     # Plot annuli outside-in
+    #     for num, annulus in enumerate(RadialProfile.annuli[::-1]):
+    #         try:
+    #             # EllipticalAnnulus attributes
+    #             width = annulus.b_out
+    #             height = annulus.a_out
+    #         except AttributeError:
+    #             # EllipticalAperture attributes
+    #             width = annulus.b
+    #             height = annulus.a
+    #         ellipse = mpl.patches.Ellipse(
+    #             xy=annulus.positions,
+    #             width=width * 2,  # full major/minor axis
+    #             height=height * 2,  # full major/minor axis
+    #             angle=(np.rad2deg(annulus.theta) - 90) % 360.0,  # PA is 0 deg at North
+    #             alpha=alpha_coeff * (num + 1) / len(RadialProfile.annuli),
+    #             **kwargs,
+    #         )
+    #         ax.add_patch(ellipse)
 
 
 def lognorm_median(r_data, g_data, b_data, a=1000, norm_factor=1000):
