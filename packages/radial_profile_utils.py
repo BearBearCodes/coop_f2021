@@ -92,8 +92,9 @@ def calc_radius(b_in, b_out, a_in=None, a_out=None, is_rectangle=False):
     radius, the inner semi-major and semi-minor axes should be treated as zero.
 
     For rectangular annuli, each radius is defined as the midpoint of the rectangular
-    annulus' widths (e.g., along the major axis of a target). For a rectangle, the inner
-    width should be treated as zero.
+    annulus' widths (e.g., along the major axis of a target). For a rectangle surrounding
+    the origin, the inner width should be treated as the negative of the outer width to
+    ensure the radius is zero (i.e., the midpoint of the rectangle is the origin).
 
     Parameters:
       b_in, b_out :: floats or array of floats
@@ -101,7 +102,8 @@ def calc_radius(b_in, b_out, a_in=None, a_out=None, is_rectangle=False):
         ellipses/annuli. N.B. an ellipse's inner semi-minor axis length is 0.
         If is_rectangle is True, these are the inner and outer widths of the rectangular
         annulus (aka RectangularSandwich). An ordinary rectangle has an inner width (b_in)
-        of zero
+        equal to the negative of its outer width (b_out), ensuring that the midpoint of
+        the rectangle is zero (i.e., radius is zero for a rectangle centred on the origin)
       a_in, a_out :: floats or array of floats
         The inner and outer semi-major axes of the ellipses/annuli. N.B. an ellipse's
         inner semi-major axis length is 0. These are ignored if is_rectangle is True
@@ -1045,16 +1047,17 @@ def fit_rectangles(
         RectangularAperture instead of a RectangularSandwich)
       widths_in, widths_out :: 1D arrays of floats
         The widths of the rectangles/annuli in pixel units along the direction defined by
-        the position angle. Note that a RectangularAperture has a widths_in value of 0
+        the position angle. Note that a RectangularAperture has a widths_in value equal to
+        the negative of its widths_out value (ensures the radius calculation is zero)
     """
 
     def _append_rect(_num):
         _width_out = (2 * _num + 1) * min_width
-        _width_in = (2 * _num - 1) * min_width if _num > 0 else 0.0
+        _width_in = (2 * _num - 1) * min_width if _num > 0 else -_width_out
         widths_out.append(_width_out)
         widths_in.append(_width_in)
         heights_out.append(height)
-        if _width_in == 0:
+        if _width_in < 0:
             rectangle = RectangularAperture(center, _width_out, height, theta=pa)
         else:
             rectangle = RectangularSandwich(
@@ -1366,7 +1369,9 @@ def calc_radial_profile(
       b_ins, b_outs :: 1D arrays
         The inner and outer semi-minor axes of the ellipses/annuli in pixel units. N.B. an
         ellipse's inner semi-minor axis length is 0. If >= i_threshold, these are the
-        widths of the rectangles in the galaxy's major axis direction
+        widths of the rectangles in the galaxy's major axis direction (and b_ins for the
+        first rectangle will be equal to the negative of its corresponding b_outs value to
+        ensure the radius is calculated as zero)
     """
     #
     # Check inputs
