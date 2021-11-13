@@ -710,6 +710,38 @@ def joint_contour_plot(
         return (fig, ax, ax_r, ax_t)
 
 
+def set_aspect(ax, aspect_ratio, logx=False, logy=False):
+    """
+    Robustly set the aspect ratio of a subplot.
+
+    Parameters:
+      ax :: matplotlib.axes.Axes
+        The subplot axes on which to set the aspect ratio
+      aspect_ratio :: float
+        The y:x aspect ratio (e.g., aspect_ratio=2.0 for a rectangular subplot twice as
+        tall as it is wide)
+      logx :: bool (optional)
+        Set to True if the x-axis is on a log10 scale
+      logy :: bool (optional)
+        Set to True if the y-axis is on a log10 scale
+
+    Returns: ax.set_aspect()
+      ax.set_aspect() :: `matplotlib.axes.Axes.set_aspect`
+        Sets the aspect ratio of the subplot with axes ax
+    """
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    if logx:
+        xrange = np.log10(xlim[1]) - np.log10(xlim[0])
+    else:
+        xrange = xlim[1] - xlim[0]
+    if logy:
+        yrange = np.log10(ylim[1]) - np.log10(ylim[0])
+    else:
+        yrange = ylim[1] - ylim[0]
+    return ax.set_aspect(aspect_ratio * xrange / yrange, adjustable="box")
+
+
 # ------------------------ MISCELLANEOUS FUNCTIONS FOR MY OWN USE ------------------------
 
 
