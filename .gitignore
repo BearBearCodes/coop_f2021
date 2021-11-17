@@ -134,6 +134,8 @@ dmypy.json
 # Proprietary data
 *.fit
 *.fits
+ngvs_data/
+ngvs_data_old/
 vertico_data/
 vertico_data_old/
 sed_fits/
