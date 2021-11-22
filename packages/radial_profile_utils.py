@@ -244,9 +244,9 @@ def bootstrap(
     #
     if n_samples is None:
         n_samples = np.size(data)
-    if n_bootstraps < 1 or not isinstance(n_bootstraps, int):
+    if n_bootstraps < 1 or not isinstance(n_bootstraps, (int, np.int64)):
         raise ValueError("n_bootstraps must be an integer > 0")
-    if n_samples < 1 or not isinstance(n_samples, int):
+    if n_samples < 1 or not isinstance(n_samples, (int, np.int64)):
         raise ValueError("n_samples must be an integer > 0")
     if sample_kwargs is None:
         sample_kwargs = {}
@@ -528,9 +528,9 @@ def calc_avg_sn_aperture(
         _arr = _arr[~np.isnan(_arr)]  # remove NaNs if present
         if _n_samples is None:
             _n_samples = np.size(_arr)
-        elif _n_samples < 1 or not isinstance(_n_bootstraps, int):
+        elif _n_samples < 1 or not isinstance(_n_bootstraps, (int, np.int64)):
             raise ValueError("_n_bootstraps must be an integer > 0")
-        if _n_bootstraps < 1 or not isinstance(_n_bootstraps, int):
+        if _n_bootstraps < 1 or not isinstance(_n_bootstraps, (int, np.int64)):
             raise ValueError("_n_bootstraps must be an integer > 0")
         #
         # Bootstrap
@@ -898,7 +898,7 @@ def fit_annuli(
     if n_annuli is not None and snr_cutoff is not None:
         raise ValueError("n_annuli and snr_cutoff cannot both be specified")
     elif n_annuli is not None:
-        if n_annuli < 1 or not isinstance(n_annuli, int):
+        if n_annuli < 1 or not isinstance(n_annuli, (int, np.int64)):
             raise ValueError("n_annulus must be an integer > 0")
         for num in range(n_annuli):
             _append_annulus(num)

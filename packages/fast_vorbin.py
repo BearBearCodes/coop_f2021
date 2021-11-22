@@ -491,7 +491,8 @@ def voronoi_2d_binning(x, y, signal, noise, targetSN, cvt=True,
         the pixels are not optimally weighted, and the CVT step
         appears to introduce significant gradients in the S/N.
         A similar alternative consists of using the /WVT keyword below.
-        PLOT: Set this keyword to produce a plot of the two-dimensional
+    plot:
+        Set this keyword to produce a plot of the two-dimensional
         bins and of the corresponding S/N at the end of the
         computation.
     pixsize:
