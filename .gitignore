@@ -149,3 +149,25 @@ sed_fits/
 !galaxies/**/*.pdf
 !galaxies/**/*.png
 !galaxies/**/*.jpg
+
+# Large pickle files
+galaxies/NGC4501/NGC4501_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4302/NGC4302_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4321/NGC4321_vorbin_SNR50_In+Out.pkl
+galaxies/NGC4321/NGC4321_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4535/NGC4535_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4579/NGC4579_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4569/NGC4569_vorbin_SNR50_ugizBinned.pkl
+galaxies/lookup_table/TOTAL_no4189_lookupInputs.pkl
+galaxies/lookup_table/TOTAL_no4189+4216+4302_lookupInputs.pkl
+galaxies/lookup_table/TOTAL_no4216+4302_lookupInputs.pkl
+galaxies/NGC4402/NGC4402_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4216/NGC4216_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4216/NGC4216_vorbin_SNR50_In+Out.pkl
+galaxies/NGC4254/NGC4254_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4254/NGC4254_vorbin_SNR50_In+Out.pkl
+galaxies/NGC4254/NGC4254_vorbin_SNR50_ugizBinned_OLD.pkl
+galaxies/NGC4254/NGC4254_vorbin_SNR50_In+Out_OLD.pkl
+galaxies/NGC4654/NGC4654_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4548/NGC4548_vorbin_SNR50_ugizBinned.pkl
+galaxies/NGC4192/NGC4192_vorbin_SNR50_ugizBinned.pkl
