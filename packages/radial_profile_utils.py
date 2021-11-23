@@ -1507,3 +1507,310 @@ def calc_radial_profile(
         b_ins,
         b_outs,
     )
+
+
+def split_area_mask(area_mask, center, split_angle):
+    """
+    Divides an area mask into two masks through the centre along the split angle. There
+    may be a small gap (around 1 pixel width) between the two returned masks because of
+    floating point comparisons. I have yet to find a way to avoid this (please let me know
+    if you have an idea!).
+
+    Parameters:
+      area_mask :: 2D array
+        The area mask to split
+      center :: 2-tuple of ints
+        The (y, x) pixel coordinates of the point at which you want to split the area mask
+        (typically the centre of the area mask)
+      split_angle :: float
+        The angle in degrees at which to split the area mask. The split angle is defined
+        to be zero on the right and increases counter-clockwise (i.e., just like how
+        angles in mathematics are typically defined)
+
+    Returns: mask1, mask2
+      mask1, mask2 :: 2D arrays
+        The two parts of the area mask each with the same shape as area_mask. mask1 is the
+        part of the mask above the split line and mask2 is the part of the mask below the
+        split line. If the split line is a vertical line (i.e., split_angle is 90 or 270
+        degrees), then mask1 is the part of the mask to the right of the split line and
+        mask2 is the part of the mask to the left of the split line
+    """
+    split_angle = split_angle % 360.0
+    xvals = np.arange(area_mask.shape[1]).astype(int)
+    yvals = np.arange(area_mask.shape[0]).astype(int)
+    xcoords, ycoords = np.meshgrid(xvals, yvals)
+    mask1, mask2 = np.copy(area_mask), np.copy(area_mask)
+    if abs(split_angle - 90.0) < 1e-12 or abs(split_angle - 270.0) < 1e-12:
+        # Vertical split
+        x_split = center[1]
+        mask1[xcoords < x_split] = np.nan
+        mask2[xcoords >= x_split] = np.nan
+    else:
+        slope = np.tan(np.deg2rad(split_angle))
+        y_split = slope * (xcoords - center[1]) + center[0]  # point-slope form
+        mask1[ycoords < y_split] = np.nan
+        mask2[ycoords >= y_split] = np.nan
+    return mask1, mask2
+
+
+def calc_avg_sn_split_mask(
+    signal,
+    area_mask,
+    center,
+    split_angle,
+    noise=None,
+    include_bad=False,
+    func="median",
+    plot=False,
+    bootstrap_errs=False,
+    **bootstrap_errs_kwargs,
+):
+    """
+    TODO: finish docstring
+    """
+    def _debug_plot(_arr, title=None):
+        # pylint: disable=expression-not-assigned
+        fig, ax = plt.subplots()
+        img = ax.imshow(_arr, origin="lower")
+        fig.colorbar(img)
+        ax.set_title(title) if title is not None else None
+        plt.show()
+
+    def _bootstrap_err(
+        _arr,
+        _func,
+        _is_noise=False,
+        _area_scalar=None,
+        _n_bootstraps=100,
+        _n_samples=None,
+        _seed=None,
+    ):
+        # pylint: disable=comparison-with-callable
+        #
+        # Check inputs
+        #
+        _arr = _arr[~np.isnan(_arr)]  # remove NaNs if present
+        if _n_samples is None:
+            _n_samples = np.size(_arr)
+        elif _n_samples < 1 or not isinstance(_n_bootstraps, (int, np.int64)):
+            raise ValueError("_n_bootstraps must be an integer > 0")
+        if _n_bootstraps < 1 or not isinstance(_n_bootstraps, (int, np.int64)):
+            raise ValueError("_n_bootstraps must be an integer > 0")
+        #
+        # Bootstrap
+        #
+        bootstraps = np.zeros(_n_bootstraps)
+        rng = np.random.default_rng(_seed)
+        if _func != np.nanmedian and _func != np.nansum:
+            raise ValueError("_func must be either np.nanmedian or np.nansum")
+        elif _func == np.nansum and _is_noise:
+            # Sum noise in quadrature
+            for i in range(_n_bootstraps):
+                rng_vals = rng.choice(_arr, size=_n_samples, replace=True)
+                bootstraps[i] = np.sqrt(_func(rng_vals * rng_vals))
+        else:
+            # Sum signal or get median of signal/noise
+            for i in range(_n_bootstraps):
+                bootstraps[i] = _func(rng.choice(_arr, size=_n_samples, replace=True))
+        if _func == np.nansum:
+            # Calculate mean
+            if _area_scalar is None:
+                raise ValueError("_area_scalar must be specified if _func == np.nansum")
+            bootstraps = bootstraps / _area_scalar
+        return np.nanstd(bootstraps)
+
+    fill_value = 0.0 if include_bad else np.nan
+    signal, noise = mask_bad(signal, include_bad, noise=noise, bad_fill_value=fill_value)
+    #
+    # Split masks
+    #
+    mask1, mask2 = split_area_mask(area_mask, center, split_angle)
+    mask1_area = np.nansum(mask1)
+    mask2_area = np.nansum(mask2)
+    #
+    # Calculate regions over which to calculate averages
+    #
+    avg_noise1, avg_noise2 = None, None
+    signal1 = signal * mask1
+    signal2 = signal * mask2
+    if plot:
+        _debug_plot(signal1, title="Masked signal 1")
+        _debug_plot(signal2, title="Masked signal 2")
+    if noise is not None:
+        noise1 = noise * mask1
+        noise2 = noise * mask2
+        if plot:
+            _debug_plot(noise1, title="Masked noise 1")
+            _debug_plot(noise2, title="Masked noise 2")
+    #
+    # Calculate averages
+    #
+    if func == "median":
+        func = np.nanmedian
+        avg_signal1 = func(signal1)
+        avg_signal2 = func(signal2)
+        if noise is not None:
+            avg_noise1 = func(noise1)
+            avg_noise2 = func(noise2)
+    elif func == "mean":
+        func = np.nansum
+        # Straight arithmetic sum divided by area (incl. edge effects)
+        avg_signal1 = func(signal1)
+        avg_signal1 = avg_signal1 / mask1_area
+        avg_signal2 = func(signal2)
+        avg_signal2 = avg_signal2 / mask2_area
+        if plot:
+            _debug_plot(mask1, title="Dividing signal 1 by this area")
+            _debug_plot(mask2, title="Dividing signal 2 by this area")
+        if noise is not None:
+            # Add noise in quadrature then divide by area (incl. edge effects)
+            avg_noise1 = func(noise1 * noise1)
+            avg_noise1 = np.sqrt(avg_noise1) / mask1_area
+            avg_noise2 = func(noise2 * noise2)
+            avg_noise2 = np.sqrt(avg_noise2) / mask2_area
+            if plot:
+                _debug_plot(mask1, title="Dividing noise 1 by this area")
+                _debug_plot(mask2, title="Dividing noise 2 by this area")
+    else:
+        raise ValueError("func must be 'median' or 'mean'")
+    #
+    # Estimate uncertainties using bootstrapping
+    #
+    avg_signal1_err, avg_signal2_err = None, None
+    avg_noise1_err, avg_noise2_err = None, None
+    if bootstrap_errs:
+        if np.any(
+            [
+                var in bootstrap_errs_kwargs
+                for var in ["_arr", "_func", "_is_noise", "_area"]
+            ]
+        ):
+            return ValueError(
+                "_arr, _func, _is_noise, and _area cannot be in bootstrap_errs_kwargs"
+            )
+        avg_signal1_err = _bootstrap_err(
+            signal1,
+            func,
+            _is_noise=False,
+            _area_scalar=mask1_area,
+            **bootstrap_errs_kwargs,
+        )
+        avg_signal2_err = _bootstrap_err(
+            signal2,
+            func,
+            _is_noise=False,
+            _area_scalar=mask2_area,
+            **bootstrap_errs_kwargs,
+        )
+        if noise is not None:
+            avg_noise1_err = _bootstrap_err(
+                noise1,
+                func,
+                _is_noise=True,
+                _area_scalar=mask1_area,
+                **bootstrap_errs_kwargs,
+            )
+            avg_noise2_err = _bootstrap_err(
+                noise2,
+                func,
+                _is_noise=True,
+                _area_scalar=mask2_area,
+                **bootstrap_errs_kwargs,
+            )
+    #
+    # Standard deviation of data in each mask
+    #
+    std_signal1, std_signal2 = np.nanstd(signal1), np.nanstd(signal2)
+    if noise is not None:
+        std_noise1, std_noise2 = np.nanstd(noise1), np.nanstd(noise2)
+    else:
+        std_noise1, std_noise2 = None, None
+    return (
+        [avg_signal1, avg_signal2],
+        [avg_noise1, avg_noise2],
+        [avg_signal1_err, avg_signal2_err],
+        [avg_noise1_err, avg_noise2_err],
+        [std_signal1, std_signal2],
+        [std_noise1, std_noise2],
+        [mask1, mask2],
+    )
+
+
+def calc_avg_sn_split_mask_multi(
+    signal, area_masks, center, split_angle, noise=None, header=None, wcs=None, **kwargs
+):
+    """
+    Results are all 2D arrays of shape (len(area_masks), 2) or None (except for
+    split_masks, which is a 4D array: a 2D array with 2D elements). The rows (1st index)
+    correspond to the same mask in area_masks. The columns (2nd index) correspond to the
+    same split (i.e., mask1 or mask2) over all the area_masks.
+
+    For example, if we want to get the two halves of the first area_mask, we would use:
+                                mask1, mask2 = masks[0]
+    If we want to get the top half of all the area_masks, we would use:
+                                all_masks1 = masks[:, 0]
+    This slicing convention applies to all the returned arrays.
+
+    TODO: finish docstring
+    """
+    #
+    # Check some inputs
+    #
+    if wcs is not None and header is not None:
+        print("Info: using provided WCS instead of converting header to WCS")
+    elif wcs is None and header is not None:
+        wcs = WCS(header)
+    if isinstance(center, coord.SkyCoord):
+        if wcs is None:
+            raise ValueError("wcs must be provided if center is not in pixel coordinates")
+        center = wcs.world_to_pixel(center)
+    #
+    # Split area_masks and calculate averages
+    #
+    avg_signals = []
+    avg_noises = []
+    avg_signal_errs = []
+    avg_noise_errs = []
+    std_signals = []
+    std_noises = []
+    split_masks = []
+    for mask in area_masks:
+        (
+            tmp_signal,
+            tmp_noise,
+            tmp_signal_err,
+            tmp_noise_err,
+            tmp_signal_std,
+            tmp_noise_std,
+            tmp_split_mask,
+        ) = calc_avg_sn_split_mask(
+            signal, mask, center, split_angle, noise=noise, **kwargs
+        )
+        avg_signals.append(tmp_signal)
+        avg_noises.append(tmp_noise)
+        avg_signal_errs.append(tmp_signal_err)
+        avg_noise_errs.append(tmp_noise_err)
+        std_signals.append(tmp_signal_std)
+        std_noises.append(tmp_noise_std)
+        split_masks.append(tmp_split_mask)
+    avg_signals, avg_noises = np.asarray(avg_signals), np.asarray(avg_noises)
+    avg_signal_errs = np.asarray(avg_signal_errs)
+    avg_noise_errs = np.asarray(avg_noise_errs)
+    std_signals, std_noises = np.asarray(std_signals), np.asarray(std_noises)
+    split_masks = np.asarray(split_masks)
+    #
+    # In this case, 1st element is None <=> any element is None <=> all elements are None
+    #
+    avg_noises = None if avg_noises[0, 0] is None else avg_noises
+    avg_signal_errs = None if avg_signal_errs[0, 0] is None else avg_signal_errs
+    avg_noise_errs = None if avg_noise_errs[0, 0] is None else avg_noise_errs
+    std_noises = None if std_noises[0, 0] is None else std_noises
+    return (
+        avg_signals,
+        avg_noises,
+        avg_signal_errs,
+        avg_noise_errs,
+        std_signals,
+        std_noises,
+        split_masks,
+    )

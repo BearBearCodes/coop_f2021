@@ -17,6 +17,7 @@ import radial_profile_utils as rpu
 
 # TODO: make a function to find the ellipse enclosing x% of the data
 
+
 class RadialProfile:
     """
     For radial profiles of 2D data.
@@ -25,15 +26,20 @@ class RadialProfile:
       calc_radial_profile()
         Calculates the radial profile. Main workhorse of this class
       calc_area()
-        Calculates the area of the radial profile annuli
+        Calculates the area of the radial profile annuli. Must run calc_radial_profile()
+        first
       correct_for_i()
-        Corrects the radial profile data/noise for inclination
+        Corrects the radial profile data/noise for inclination. Must run
+        calc_radial_profile() first
       copy()
         Convenience function so the user does not have to import the copy module
+      directional_radial_profile()
+        Calculates the radial profile along a given direction. Must run
+        calc_radial_profile() first
 
     Attributes: (data, center, i, pa, noise, avg_data, avg_noise, avg_data_err,
                 avg_noise_err, std_data, std_noise, data_area_mask, noise_area_mask,
-                radii, annuli, a_ins, a_outs, b_ins, b_outs, rp_options)
+                radii, annuli, a_ins, a_outs, b_ins, b_outs, rp_options, drp_results)
       data :: 2D array
         The data used for generating a radial profile. If using snr_cutoff, the data
         should be background-subtracted
@@ -92,6 +98,10 @@ class RadialProfile:
       rp_options :: dict
         The parameters used to generate the radial profile (e.g., n_annuli, min_width,
         etc.). Irrelevant attributes are set to None
+      drp_results :: dict
+        The directional_radial_profile() results with keys: "radii", "avg_data",
+        "avg_noise", "avg_data_err", "avg_noise_err", "std_data", "std_noise",
+        "split_masks"
     """
 
     def __init__(self, data, center, i, pa, noise=None):
@@ -158,6 +168,8 @@ class RadialProfile:
         self.b_ins = None
         self.b_outs = None
         self.rp_options = None
+        # Attributes to be set by directional_radial_profile()
+        self.drp_results = None
 
     def copy(self):
         """
@@ -444,12 +456,14 @@ class RadialProfile:
         Returns: new_RadialProfile
           new_RadialProfile :: `RadialProfile` object
             The `RadialProfile` object with quantities (i.e., data, noise, avg_data,
-            avg_noise) corrected for inclination
+            avg_noise, and if applicable, the directional radial profile's
+            avg_data and avg_noise) corrected for inclination
         """
         # pylint: disable=unsubscriptable-object
         if self.avg_data is None:
             raise ValueError("Radial profile must be generated first")
         new_RadialProfile = copy.deepcopy(self)
+        # N.B. constants do not change standard deviation or uncertainties on averages
         new_RadialProfile.data = rpu.correct_for_i(
             self.data, self.i, self.rp_options["i_threshold"], i_replacement
         )
@@ -463,5 +477,163 @@ class RadialProfile:
             new_RadialProfile.avg_noise = rpu.correct_for_i(
                 self.avg_noise, self.i, self.rp_options["i_threshold"], i_replacement
             )
-        # N.B. constants do not change standard deviation or uncertainties on averages
+        if self.drp_results is not None:
+            # Correct directional profile results for inclination
+            new_RadialProfile.drp_results["avg_data"] = rpu.correct_for_i(
+                self.drp_results["avg_data"],
+                self.rp_options["i_threshold"],
+                i_replacement,
+            )
+            if self.drp_results["avg_noise"] is not None:
+                new_RadialProfile.drp_results["avg_noise"] = rpu.correct_for_i(
+                    self.drp_results["avg_noise"],
+                    self.rp_options["i_threshold"],
+                    i_replacement,
+                )
+        return new_RadialProfile
+
+    def directional_radial_profile(
+        self,
+        angle=None,
+        include_bad=None,
+        func=None,
+        debug_plot=False,
+        bootstrap_errs=False,
+        n_bootstraps=100,
+        n_samples=None,
+        bootstrap_seed=None,
+        results_to_1d=True,
+    ):
+        """
+        Calculates the radial profile along a given direction specified by the angle
+        parameter. This is accomplished by splitting the radial profile annulus/rectangle
+        perpendicular to the specified angle and averaging these two areas individually.
+        That is, the split line is the line perpendicular to the supplied angle. Note that
+        the angle is defined to be zero on the +x-axis and increases counter-clockwise
+        (i.e., the traditional definition of the angle in mathematics).
+
+        If results_to_1d is False, the results are all either 2D arrays with shapes
+        (len(n_annuli), 2) or None (except for split_masks, which is a 4D array: a 2D
+        array with 2D entries). The rows (1st index) correspond to the same annulus. The
+        columns (2nd index) correspond to the same half (i.e., mask1 or mask2) over all
+        the annuli.
+
+        For example, if we want to get the two halves of the first annulus, we would use:
+                                    mask1, mask2 = masks[0]
+        If we want to get the top half of all the annuli, we would use:
+                                    all_masks1 = masks[:, 0]
+        This slicing convention applies to all the returned arrays.
+
+        Note that mask1 is the part of the mask above the split line and mask2 is the
+        part of the mask below the split line. If the split line is a vertical line (i.e.,
+        angle is 0 or 180 degrees), then mask1 is the part of the mask to the right of the
+        split line and mask2 is the part of the mask to the left of the split line.
+
+        TODO: finish docstring
+
+        Parameters:
+          angle :: float (optional)
+            The direction in degrees along which to calculate the radial profile. If None,
+            use the position angle of the galaxy as the direction. Note that the angle is
+            defined to be zero on the +x-axis and increases counter-clockwise (i.e., the
+            traditional definition of the angle in mathematics)
+          results_to_1d :: bool (optional)
+            If True, return the results as 1D arrays, each ordered from the most negative
+            radius to the most positive radius. Note that the "split_masks" entry of the
+            results will be 3D since it is 1D along the first axis, but each entry along
+            this first axis is a 2D array
+
+        Returns: new_RadialProfile
+          new_RadialProfile :: `RadialProfile` object
+            The `RadialProfile` object with directional radial profile results stored in
+            the "drp_results" attribute. The "drp_results" attribute is a dictionary with
+            keys: "radii", "avg_data", "avg_noise", "avg_data_err", "avg_noise_err",
+            "std_data", "std_noise", "split_masks"
+        """
+        if self.avg_data is None:
+            raise ValueError("Radial profile must be generated first")
+        new_RadialProfile = copy.deepcopy(self)
+        #
+        # Determine the angle of the slice (perpendicular to the direction of the desired
+        # radial profile)
+        #
+        split_angle = self.pa if angle is None else (angle + 90) % 360.0
+        #
+        # Other parameters
+        #
+        include_bad = (
+            self.rp_options["include_bad"] if include_bad is None else include_bad
+        )
+        func = self.rp_options["func"] if func is None else func
+        #
+        # Generate directional radial profile values
+        #
+        (
+            avg_signals,
+            avg_noises,
+            avg_signal_errs,
+            avg_noise_errs,
+            std_signals,
+            std_noises,
+            split_masks,
+        ) = rpu.calc_avg_sn_split_mask_multi(
+            self.data,
+            self.data_area_masks,
+            self.center,
+            split_angle,
+            noise=self.noise,
+            header=self.rp_options["header"],
+            wcs=self.rp_options["wcs"],
+            include_bad=include_bad,
+            func=func,
+            plot=debug_plot,
+            bootstrap_errs=bootstrap_errs,
+            _n_bootstraps=n_bootstraps,
+            _n_samples=n_samples,
+            _seed=bootstrap_seed,
+        )
+        #
+        # Fix radius for high-inclination galaxies (so radius is still centre of rectangles)
+        #
+        if self.rp_options["i_threshold"] is not None and self.i >= self.rp_options["i_threshold"]:
+            tmp_b_ins = self.b_ins
+            tmp_b_ins[0] = 0
+            tmp_radii = rpu.calc_radius(tmp_b_ins, self.b_outs, is_rectangle=True)
+        else:
+            tmp_radii = self.radii
+        #
+        # Process results and save to drp_results attribute
+        #
+        if results_to_1d:
+            # Reshape to 1D arrays for ease of use when plotting
+            radii = np.hstack((-tmp_radii[::-1], tmp_radii))
+            avg_signals = np.hstack((avg_signals[:, 1][::-1], avg_signals[:, 0]))
+            if avg_noises is not None:
+                avg_noises = np.hstack((avg_noises[:, 1][::-1], avg_noises[:, 0]))
+            if avg_signal_errs is not None:
+                avg_signal_errs = np.hstack(
+                    (avg_signal_errs[:, 1][::-1], avg_signal_errs[:, 0])
+                )
+            if avg_noise_errs is not None:
+                avg_noise_errs = np.hstack(
+                    (avg_noise_errs[:, 1][::-1], avg_noise_errs[:, 0])
+                )
+            std_signals = np.hstack((std_signals[:, 1][::-1], std_signals[:, 0]))
+            if std_noises is not None:
+                std_noises = np.hstack((std_noises[:, 1][::-1], std_noises[:, 0]))
+            split_masks = np.concatenate(
+                (split_masks[:, 1, :, :][::-1], split_masks[:, 0, :, :]), axis=0
+            )
+        else:
+            radii = np.column_stack((tmp_radii, -tmp_radii))
+        new_RadialProfile.drp_results = {
+            "radii": radii,
+            "avg_data": avg_signals,
+            "avg_noise": avg_noises,
+            "avg_data_err": avg_signal_errs,
+            "avg_noise_err": avg_noise_errs,
+            "std_data": std_signals,
+            "std_noise": std_noises,
+            "split_masks": split_masks,
+        }
         return new_RadialProfile
