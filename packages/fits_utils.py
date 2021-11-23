@@ -364,6 +364,9 @@ def optimal_sn(index, signal, noise):
     )
 
 
+# ----------------------------- FUNCTIONS FOR REGULAR BINNING ----------------------------
+
+
 def reg_bin_sn(signal, noise, block_size=(4, 4), print_info=True, func=np.sum):
     """
     Regular preliminary binning of 2D signal & noise data (e.g., for Voronoi binning).
@@ -407,9 +410,200 @@ def reg_bin_sn(signal, noise, block_size=(4, 4), print_info=True, func=np.sum):
     return signal_binned, noise_binned, x_coords, y_coords, is_good
 
 
-def get_reproject_shape_factor(input_arr, target_arr, input_wcs, target_wcs):
+# * USE THESE IF INPUT ARRAYS ARE NOT YET CUT OUT TO TARGET
+
+
+def get_reproject_shape_factor(target_arr, input_wcs, target_wcs):
     """
     Determine reprojection shape and binning factor.
+
+    N.B. reprojection shape should be as close as possible to the shape of a regular "cut
+    out" if the input array was cut at the boundaries of the target.
+
+    TODO: finish docstring
+    """
+    #
+    # Find the coordinates of the target_data's edges, assuming the data are rectangular
+    #
+    target_bottomleft = target_wcs.pixel_to_world(0, 0)
+    target_topright = target_wcs.pixel_to_world(*target_arr.shape)
+    #
+    # Map the pixels above to their corresponding pixels in the input array
+    #
+    input_bottomleft = input_wcs.world_to_pixel(target_bottomleft)
+    input_topright = input_wcs.world_to_pixel(target_topright)
+    #
+    # Determine binning/transformation factor
+    #
+    input_to_target_factor = np.subtract(input_topright, input_bottomleft)
+    input_to_target_factor = np.round(
+        np.divide(input_to_target_factor, target_arr.shape)
+    ).astype(int)
+    input_reproject_shape = input_to_target_factor * target_arr.shape
+    #
+    return input_to_target_factor, input_reproject_shape
+
+
+def reproj_arr(
+    input_arr,
+    input_wcs,
+    target_wcs,
+    input_to_target_factor,
+    input_reproject_shape,
+    reproject_func=reproject.reproject_exact,
+):
+    """
+    Reproject input array to target array.
+
+    Requires the reproject package: https://reproject.readthedocs.io/en/stable/
+
+    TODO: finish docstring
+    """
+    #
+    # Reproject input array to target array
+    #
+    wcs_reproject = target_wcs.deepcopy()
+    wcs_reproject.wcs.crpix = target_wcs.wcs.crpix * input_to_target_factor
+    if wcs_reproject.wcs.has_cd():
+        wcs_reproject.wcs.cd = target_wcs.wcs.cd / input_to_target_factor
+    else:
+        wcs_reproject.wcs.cdelt = target_wcs.wcs.cdelt / input_to_target_factor
+    wcs_reproject.array_shape = input_reproject_shape
+    arr_reproject = reproject_func(
+        (input_arr, input_wcs),
+        wcs_reproject,
+        shape_out=input_reproject_shape,
+        return_footprint=False,
+    )
+    return arr_reproject, wcs_reproject
+
+
+def bin_sn_arrs_to_target(
+    signal_arr,
+    signal_wcs,
+    noise_arr,
+    noise_wcs,
+    target_arr,
+    target_wcs,
+    reproject_func=reproject.reproject_exact,
+    bin_func=np.nansum,
+    print_debug=False,
+    return_bin_dimen=False,  # for backwards compatibility...
+):
+    """
+    Bin a signal & noise array to the exact physical dimensions and resolution of a target
+    (provided via the target_wcs). The input arrays should already be masked (i.e.,
+    invalid values should be set to np.nan) and the input arrays should entirely contain
+    the target_wcs (i.e., the extent of the target_data).
+
+    Note that the signal_wcs and noise_wcs should be identical! The returned WCS object
+    will be based on the signal_wcs.
+
+    Requires the reproject package: https://reproject.readthedocs.io/en/stable/
+
+    Parameters:
+      bin_func :: `numpy.sum` or `numpy.nansum` (optional)
+
+    Returns: (x_coords, y_coords, signal_binned, noise_binned, is_good, wcs_binned,
+              bin_dimensions <- maybe)
+
+    TODO: finish docstring
+    """
+    if print_debug:
+        print("target_wcs:", target_wcs)
+        print()
+    #
+    # Determine reprojection shape and binning factor
+    #   N.B. reprojection shape should be as close as possible to the shape of a regular
+    #   "cut out" if the input array was cut at the boundaries of the target.
+    #
+    signal_to_target_factor, signal_reproject_shape = get_reproject_shape_factor(
+        target_arr, signal_wcs, target_wcs
+    )
+    if print_debug:
+        print("signal_to_target_factor:", signal_to_target_factor)
+        print("signal_reproject_shape:", signal_reproject_shape)
+        print()
+    noise_to_target_factor, noise_reproject_shape = get_reproject_shape_factor(
+        target_arr, noise_wcs, target_wcs
+    )
+    if np.any(signal_reproject_shape != noise_reproject_shape) or np.any(
+        signal_to_target_factor != noise_to_target_factor
+    ):
+        raise ValueError("Signal and noise arrays must have the same shape and wcs.")
+    #
+    # Reproject data
+    #
+    # N.B. signal_wcs_reproject and noise_wcs_reproject should be the same
+    signal_reproject, signal_wcs_reproject = reproj_arr(
+        signal_arr,
+        signal_wcs,
+        target_wcs,
+        signal_to_target_factor,
+        signal_reproject_shape,
+        reproject_func=reproject_func,
+    )
+    if print_debug:
+        print("signal_wcs_reproject:", signal_wcs_reproject)
+        print()
+    noise_reproject, noise_wcs_reproject = reproj_arr(  # pylint: disable=unused-variable
+        noise_arr,
+        noise_wcs,
+        target_wcs,
+        noise_to_target_factor,
+        noise_reproject_shape,
+        reproject_func=reproject_func,
+    )
+    #
+    # Bin to target resolution
+    #
+    signal_binned, noise_binned, x_coords, y_coords, is_good = reg_bin_sn(
+        signal_reproject,
+        noise_reproject,
+        block_size=signal_to_target_factor,
+        func=bin_func,
+        print_info=print_debug,
+    )
+    # Modify WCS object
+    wcs_binned = signal_wcs_reproject.slice(
+        (np.s_[:: signal_to_target_factor[0]], np.s_[:: signal_to_target_factor[1]])
+    )  # slicing order is correct.
+    wcs_binned.wcs.crpix = signal_wcs_reproject.wcs.crpix / signal_to_target_factor
+    if signal_wcs_reproject.wcs.has_cd():
+        wcs_binned.wcs.cd = (
+            signal_wcs_reproject.wcs.cd * signal_to_target_factor
+        )
+    else:
+        wcs_binned.wcs.cdelt = (
+            signal_wcs_reproject.wcs.cdelt * signal_to_target_factor
+        )
+    if print_debug:
+        print("wcs_binned:", wcs_binned)
+    #
+    if return_bin_dimen:
+        return (
+            x_coords,
+            y_coords,
+            signal_binned,
+            noise_binned,
+            is_good,
+            wcs_binned,
+            signal_to_target_factor,
+        )
+    else:
+        return x_coords, y_coords, signal_binned, noise_binned, is_good, wcs_binned
+
+
+# * END OF "USE THESE IF INPUT ARRAYS ARE NOT YET CUT OUT TO TARGET"
+
+
+# * USE THESE IF INPUT ARRAYS ARE ALREADY CUT OUT TO TARGET. MAY BE BUGGY
+
+
+def get_reproject_shape_factor_cut(input_arr, target_arr, input_wcs, target_wcs):
+    """
+    Determine reprojection shape and binning factor. Assumes input array has already been
+    cut to desired extent.
 
     N.B. reprojection shape should be as close as possible to the shape of a regular "cut
     out" if the input array was cut at the boundaries of the target.
@@ -427,9 +621,6 @@ def get_reproject_shape_factor(input_arr, target_arr, input_wcs, target_wcs):
     #
     target_bottomleft = target_wcs.pixel_to_world(0, 0)
     target_topright = target_wcs.pixel_to_world(*target_arr.shape)  # don't reverse
-    # target_centre = target_wcs.pixel_to_world(  # don't need this
-    #     target_arr.shape[1] / 2, target_arr.shape[0] / 2  # (x, y). This is correct
-    # )
     #
     # Map the pixels above to their corresponding pixels in the input array
     #
@@ -452,7 +643,7 @@ def get_reproject_shape_factor(input_arr, target_arr, input_wcs, target_wcs):
     return reproject_shape, input_to_reproject_factor, reproject_to_target_factor
 
 
-def reproject_arr(
+def reproject_cut_arr(
     input_arr,
     input_wcs,
     input_to_reproject_factor,
@@ -461,7 +652,8 @@ def reproject_arr(
 ):
     """
     Reproject input array to target array and update input array's WCS object. Meant to be
-    used for bin_sn_arrs_to_target().
+    used for bin_cut_sn_arrs_to_target(). Assumes input array has already been cut to
+    desired extent.
 
     Requires the reproject package: https://reproject.readthedocs.io/en/stable/
 
@@ -489,7 +681,7 @@ def reproject_arr(
     return arr_reproject, wcs_reproject
 
 
-def bin_sn_arrs_to_target(
+def bin_cut_sn_arrs_to_target(
     signal_arr,
     signal_wcs,
     noise_arr,
@@ -499,6 +691,7 @@ def bin_sn_arrs_to_target(
     reproject_func=reproject.reproject_exact,
     bin_func=np.sum,
     print_debug=False,
+    return_bin_dimen=False,  # for backwards compatibility...
 ):
     """
     Bin a signal & noise array to the exact physical dimensions and resolution of a target
@@ -519,7 +712,8 @@ def bin_sn_arrs_to_target(
     Parameters:
       bin_func :: `numpy.sum` or `numpy.nansum` (optional)
 
-    Returns: x_coords, y_coords, signal_binned, noise_binned, is_good, wcs_binned
+    Returns: (x_coords, y_coords, signal_binned, noise_binned, is_good, wcs_binned,
+              bin_dimensions <- maybe)
 
     TODO: finish docstring
     """
@@ -529,10 +723,10 @@ def bin_sn_arrs_to_target(
         print()
         print("target_wcs:", target_wcs)
         print()
-    #
-    # Do not cut out arrays because of propagation of floating point errors (+/- 1 pixel)
-    # using world_to_pixel() and pixel_to_world()
-    #
+    # #
+    # # Do not cut out arrays because of propagation of floating point errors (+/- 1 pixel)
+    # # using world_to_pixel() and pixel_to_world()
+    # #
     # signal_arr, noise_arr = np.copy(signal_arr), np.copy(noise_arr)
     # signal_arr, signal_wcs = cutout_to_target(
     #     signal_arr, signal_wcs, target_arr, target_wcs
@@ -547,7 +741,7 @@ def bin_sn_arrs_to_target(
         signal_reproject_shape,
         signal_to_reproject_factor,
         signal_reproject_to_target_factor,
-    ) = get_reproject_shape_factor(signal_arr, target_arr, signal_wcs, target_wcs)
+    ) = get_reproject_shape_factor_cut(signal_arr, target_arr, signal_wcs, target_wcs)
     if print_debug:
         print("signal_reproject_shape (y, x):", signal_reproject_shape)
         print("signal_to_reproject_factor (y, x):", signal_to_reproject_factor)
@@ -559,7 +753,7 @@ def bin_sn_arrs_to_target(
         noise_reproject_shape,
         noise_to_reproject_factor,
         noise_reproject_to_target_factor,
-    ) = get_reproject_shape_factor(noise_arr, target_arr, noise_wcs, target_wcs)
+    ) = get_reproject_shape_factor_cut(noise_arr, target_arr, noise_wcs, target_wcs)
     if (
         np.any(signal_reproject_shape != noise_reproject_shape)
         or np.any(signal_to_reproject_factor != noise_to_reproject_factor)
@@ -570,7 +764,7 @@ def bin_sn_arrs_to_target(
     # Reproject data
     #
     # N.B. signal_wcs_reproject and noise_wcs_reproject should be the same
-    signal_reproject, signal_wcs_reproject = reproject_arr(
+    signal_reproject, signal_wcs_reproject = reproject_cut_arr(
         signal_arr,
         signal_wcs,
         # target_wcs,
@@ -583,7 +777,7 @@ def bin_sn_arrs_to_target(
         print("signal_wcs_reproject:", signal_wcs_reproject)
         print()
     # pylint: disable=unused-variable
-    noise_reproject, noise_wcs_reproject = reproject_arr(
+    noise_reproject, noise_wcs_reproject = reproject_cut_arr(
         noise_arr,
         noise_wcs,
         # target_wcs,
@@ -623,7 +817,24 @@ def bin_sn_arrs_to_target(
     if print_debug:
         print("wcs_binned:", wcs_binned)
     #
-    return x_coords, y_coords, signal_binned, noise_binned, is_good, wcs_binned
+    if return_bin_dimen:
+        return (
+            x_coords,
+            y_coords,
+            signal_binned,
+            noise_binned,
+            is_good,
+            wcs_binned,
+            signal_reproject_to_target_factor,
+        )
+    else:
+        return x_coords, y_coords, signal_binned, noise_binned, is_good, wcs_binned
+
+
+# * END OF "USE THESE IF INPUT ARRAYS ARE ALREADY CUT OUT TO TARGET. MAY BE BUGGY"
+
+
+# -------------------------- END FUNCTIONS FOR REGULAR BINNING ---------------------------
 
 
 def MLi_taylor2011(gband, iband, dist, wcs, gband_err=0, iband_err=0, px_per_bin=1):
