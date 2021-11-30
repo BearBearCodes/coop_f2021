@@ -140,9 +140,9 @@ class RadialProfile:
             )
         if not isinstance(center, coord.SkyCoord) and np.shape(center) != (2,):
             raise ValueError("center must be 1D with 2 elements")
-        if not isinstance(i, (int, float)):
+        if not isinstance(i, (int, float, np.int64, np.float64)):
             raise ValueError("i (the inclination) must be a float or int")
-        if not isinstance(pa, (int, float)):
+        if not isinstance(pa, (int, float, np.int64, np.float64)):
             raise ValueError("pa (the position angle) must be a float or int")
         if noise is not None and np.shape(noise) != np.shape(data):
             raise ValueError("noise must be an array of the same shape as data")
@@ -460,23 +460,32 @@ class RadialProfile:
             avg_data and avg_noise) corrected for inclination
         """
         # pylint: disable=unsubscriptable-object
-        if self.avg_data is None:
-            raise ValueError("Radial profile must be generated first")
+        #
+        # Perfectly valid to correct data before radial profile fitting
+        #
+        # if self.avg_data is None:
+        #    raise ValueError("Radial profile must be generated first")
+        #
         new_RadialProfile = copy.deepcopy(self)
-        # N.B. constants do not change standard deviation or uncertainties on averages
+        #
+        # N.B. constants do not change standard deviation or uncertainties on averages,
+        # hence we do not need to correct them
+        #
         new_RadialProfile.data = rpu.correct_for_i(
             self.data, self.i, self.rp_options["i_threshold"], i_replacement
         )
-        new_RadialProfile.avg_data = rpu.correct_for_i(
-            self.avg_data, self.i, self.rp_options["i_threshold"], i_replacement
-        )
+        if self.avg_data is not None:
+            new_RadialProfile.avg_data = rpu.correct_for_i(
+                self.avg_data, self.i, self.rp_options["i_threshold"], i_replacement
+            )
         if self.noise is not None:
             new_RadialProfile.noise = rpu.correct_for_i(
                 self.noise, self.i, self.rp_options["i_threshold"], i_replacement
             )
-            new_RadialProfile.avg_noise = rpu.correct_for_i(
-                self.avg_noise, self.i, self.rp_options["i_threshold"], i_replacement
-            )
+            if self.avg_noise is not None:
+                new_RadialProfile.avg_noise = rpu.correct_for_i(
+                    self.avg_noise, self.i, self.rp_options["i_threshold"], i_replacement
+                )
         if self.drp_results is not None:
             # Correct directional profile results for inclination
             new_RadialProfile.drp_results["avg_data"] = rpu.correct_for_i(

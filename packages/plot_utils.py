@@ -316,7 +316,8 @@ def add_annuli(ax, annuli, high_i=False, alpha_coeff=None, **kwargs):
       alpha_coeff :: float (optional)
         The pre-factor to multiply with (num + 1) / len(annuli). That is, the alpha-value
         of each annulus will be alpha_coeff * (num + 1) / len(annuli). If None, set alpha
-        to 0.3 for low-i galaxies and 0.1 for high-i galaxies
+        to 0.3 for low-i galaxies and 0.1 for high-i galaxies. If alpha_coeff < 0, then
+        set all annuli to have an alpha of 1 (no gradient)
       kwargs :: dict (optional)
         Keyworded arguments to pass to `matplotlib.patches.Ellipse` or
         `matplotlib.patches.Rectangle`. If empty, will set the following properties:
@@ -324,10 +325,19 @@ def add_annuli(ax, annuli, high_i=False, alpha_coeff=None, **kwargs):
 
     Returns: None
     """
+    _alphas = None
+    if alpha_coeff is not None and alpha_coeff < 0:
+        _alphas = [1, ] * len(annuli)
     if kwargs == {}:
         kwargs = {"ls": "-", "edgecolor": "k", "fc": "k", "lw": 1, "zorder": 2}
+
     if high_i:  # high inclination galaxies
-        alpha_coeff = 0.1 if alpha_coeff is None else alpha_coeff
+
+        if alpha_coeff is None:
+            alpha_coeff = 0.1
+        if _alphas is None:
+            _alphas = [alpha_coeff * (num + 1) / len(annuli) for num in range(len(annuli))]
+
         for num, rectangle in enumerate(annuli[::-1]):  # plot rectangles outside-in
             try:
                 # RectangularAnnulus/RectangularSandwich attributes
@@ -344,12 +354,17 @@ def add_annuli(ax, annuli, high_i=False, alpha_coeff=None, **kwargs):
                 width=width,
                 height=height,
                 angle=np.rad2deg(rectangle.theta) % 360.0,  # same convention as PA
-                alpha=alpha_coeff * (num + 1) / len(annuli),
+                alpha=_alphas[num],
                 **kwargs,
             )
             ax.add_patch(rect)
     else:  # low-inclination galaxies
-        alpha_coeff = 0.3 if alpha_coeff is None else alpha_coeff
+        
+        if alpha_coeff is None:
+            alpha_coeff = 0.3
+        if _alphas is None:
+            _alphas = [alpha_coeff * (num + 1) / len(annuli) for num in range(len(annuli))]
+
         for num, annulus in enumerate(annuli[::-1]):  # plot annuli outside-in
             try:
                 # EllipticalAnnulus attributes
@@ -364,7 +379,7 @@ def add_annuli(ax, annuli, high_i=False, alpha_coeff=None, **kwargs):
                 width=width * 2,  # full major/minor axis
                 height=height * 2,  # full major/minor axis
                 angle=(np.rad2deg(annulus.theta) - 90) % 360.0,  # PA is 0 deg at North
-                alpha=alpha_coeff * (num + 1) / len(annuli),
+                alpha=_alphas[num],
                 **kwargs,
             )
             ax.add_patch(ellipse)
@@ -384,7 +399,8 @@ def add_annuli_RadialProfile(ax, RadialProfile, alpha_coeff=None, **kwargs):
       alpha_coeff :: float (optional)
         The pre-factor to multiply with (num + 1) / len(annuli). That is, the alpha-value
         of each annulus will be alpha_coeff * (num + 1) / len(annuli). If None, set alpha
-        to 0.3 for low-i galaxies and 0.1 for high-i galaxies
+        to 0.3 for low-i galaxies and 0.1 for high-i galaxies. If alpha_coeff < 0, then
+        set all annuli to have an alpha of 1 (no gradient)
       kwargs :: dict (optional)
         Keyworded arguments to pass to `matplotlib.patches.Ellipse` or
         `matplotlib.patches.Rectangle`. If empty, will set the following properties:
@@ -712,7 +728,7 @@ def joint_contour_plot(
 
 def set_aspect(ax, aspect_ratio, logx=False, logy=False):
     """
-    Robustly set the aspect ratio of a subplot.
+    Robustly set the y:x aspect ratio of a subplot.
 
     Parameters:
       ax :: matplotlib.axes.Axes

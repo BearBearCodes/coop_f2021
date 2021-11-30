@@ -369,7 +369,8 @@ def optimal_sn(index, signal, noise):
 
 def reg_bin_sn(signal, noise, block_size=(4, 4), print_info=True, func=np.sum):
     """
-    Regular preliminary binning of 2D signal & noise data (e.g., for Voronoi binning).
+    Regular preliminary binning of 2D signal & noise data (e.g., for binning to a
+    specific resolution).
 
     (From astropy's block_reduce() documentation): If the data are not perfectly divisible
     by block_size along a given axis, then the data will be trimmed (from the end) along
@@ -1069,6 +1070,7 @@ def load_sed_results(
     infile="prospectorFit_emcee_<NUMS>_results.txt",
     replace="<NUMS>",
     skip=None,
+    print_every=None,
 ):
     """
     Takes the individual .txt files containing the SED fitting results and compiles the
@@ -1088,7 +1090,9 @@ def load_sed_results(
       replace :: str (optional)
         The substring to in the infile str to replace with numbers between [nmin, nmax]
       skip :: array-like of ints (optional)
-        The files to skip and assign to NaN.
+        The files to skip and assign to NaN
+      print_every :: int (optional)
+        Prints the number of the file if it is divisible by print_every
 
     Returns: results
       results :: 2D array
@@ -1116,14 +1120,18 @@ def load_sed_results(
             else:
                 raise ValueError("skip must be greater than nmin.")
         else:
-            results.append(
-                # pd.read_csv() much faster than np.loadtxt()
-                pd.read_csv(
-                    path + pre_str + str(i).zfill(len_digits) + post_str,
-                    sep=" ",
-                    header=None,
-                ).values
-            )
+            if (print_every is not None) and (i % print_every == 0):
+                print("On file:", i)
+            # pd.read_csv() much faster than np.loadtxt()
+            sed_vals = pd.read_csv(
+                        path + pre_str + str(i).zfill(len_digits) + post_str,
+                        sep=" ",
+                        header=None,
+                        dtype=str,
+                    )
+            for col in range(1, sed_vals.shape[1]):
+                sed_vals[col] = sed_vals[col].astype(float)
+            results.append(sed_vals.values)
             # results.append(
             #     np.loadtxt(path + pre_str + str(i).zfill(len_digits) + post_str)
             # )
@@ -1133,7 +1141,7 @@ def load_sed_results(
 
 def calc_gas_fraction(gas_density, mass_density, gas_density_err=0, mass_density_err=0):
     """
-    Calculates the gas fraction its uncertainty.
+    Calculates the gas fraction and its uncertainty.
 
     The gas fraction is defined as
                         gas fraction = log10(gas_density / mass_density)
