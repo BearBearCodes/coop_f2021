@@ -1052,16 +1052,21 @@ def fit_rectangles(
     """
 
     def _append_rect(_num):
-        _width_out = (2 * _num + 1) * min_width
-        _width_in = (2 * _num - 1) * min_width if _num > 0 else -_width_out
+        _width_out = (_num + 0.5) * min_width
+        _width_in = (_num - 0.5) * min_width  # negative inner width for 1st rectangle
         widths_out.append(_width_out)
         widths_in.append(_width_in)
         heights_out.append(height)
-        if _width_in < 0:
-            rectangle = RectangularAperture(center, _width_out, height, theta=pa)
+        if _num == 0:
+            rectangle = RectangularAperture(center, min_width, height, theta=pa)
         else:
             rectangle = RectangularSandwich(
-                center, _width_in, _width_out, height, height, theta=pa
+                center,
+                (2 * _num - 1) * min_width,
+                (2 * _num + 1) * min_width,
+                height,
+                height,
+                theta=pa,
             )
         rectangles.append(rectangle)
 
@@ -1568,6 +1573,7 @@ def calc_avg_sn_split_mask(
     """
     TODO: finish docstring
     """
+
     def _debug_plot(_arr, title=None):
         # pylint: disable=expression-not-assigned
         fig, ax = plt.subplots()
