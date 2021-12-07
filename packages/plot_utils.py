@@ -25,6 +25,7 @@ def add_scalebar(
     pad=1,
     frameon=False,
     fontsize=None,
+    alpha=1,
     **kwargs,
 ):
     """
@@ -54,6 +55,15 @@ def add_scalebar(
       fontsize :: str or int (optional)
         The font size for the label. If None, use the default font size determined by
         matplotlib
+      alpha :: float (optional)
+        The transparency of the scalebar and label. Does not seem to work... Instead,
+        tweak the colour passed into this method instead. For example:
+            ```
+            color = "k"
+            alpha = 0.5
+            rgba = mpl.colors.to_rgba(color)[0:3] + (alpha,)  # red, green, blue, alpha
+            ```
+        Credit to Dr. Toby Brown for this workaround!
       **kwargs :: dict (optional)
         Keyworded arguments to pass to `matplotlib.offsetbox.AnchoredOffsetbox`
 
@@ -72,7 +82,7 @@ def add_scalebar(
     # Set font properties
     fontproperties = mpl.font_manager.FontProperties(size=fontsize)
     # Add scale bar
-    scalebar = AnchoredSizeBar(
+    Scalebar = AnchoredSizeBar(
         ax.transData,
         px_per_kpc * scalebar_factor,
         label=label,
@@ -84,7 +94,10 @@ def add_scalebar(
         size_vertical=size_vertical,
         **kwargs,
     )
-    return ax.add_artist(scalebar)
+    # Why is this not working? It is setting the alpha value properly... >:(
+    Scalebar.size_bar.set_alpha(alpha)
+    Scalebar.txt_label.set_alpha(alpha)
+    return ax.add_artist(Scalebar)
 
 
 def add_beam(ax, header, xy=(0, 0), **kwargs):
@@ -141,6 +154,7 @@ def add_scalebeam(
     fc="none",
     ec="k",
     lw=1,
+    alpha=1,
     **kwargs,
 ):
     """
@@ -168,6 +182,8 @@ def add_scalebeam(
         The edge colour of the ellipse
       lw :: float (optional)
         The line width of the ellipse
+      alpha :: float (optional)
+        The transparency of the ellipse
       **kwargs :: dict (optional)
         Keyworded arguments to pass to `matplotlib.offsetbox.AnchoredOffsetbox`
 
@@ -192,6 +208,7 @@ def add_scalebeam(
     Beam.ellipse.set_facecolor(fc)
     Beam.ellipse.set_edgecolor(ec)
     Beam.ellipse.set_linewidth(lw)
+    Beam.ellipse.set_alpha(alpha)
     ax.add_artist(Beam)
 
 
