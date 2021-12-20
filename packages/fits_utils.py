@@ -1132,9 +1132,6 @@ def load_sed_results(
             for col in range(1, sed_vals.shape[1]):
                 sed_vals[col] = sed_vals[col].astype(float)
             results.append(sed_vals.values)
-            # results.append(
-            #     np.loadtxt(path + pre_str + str(i).zfill(len_digits) + post_str)
-            # )
     results = np.vstack(results)
     return results
 

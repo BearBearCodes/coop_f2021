@@ -432,55 +432,6 @@ def add_annuli_RadialProfile(ax, RadialProfile, alpha_coeff=None, **kwargs):
     return add_annuli(
         ax, RadialProfile.annuli, high_i=high_i, alpha_coeff=alpha_coeff, **kwargs
     )
-    # if kwargs == {}:
-    #     kwargs = {"ls": "-", "edgecolor": "k", "fc": "k", "lw": 1, "zorder": 2}
-    # if (
-    #     RadialProfile.rp_options["i_threshold"] is not None
-    #     and RadialProfile.i >= RadialProfile.rp_options["i_threshold"]
-    # ):  # high inclination galaxies
-    #     alpha_coeff = 0.1 if alpha_coeff is None else alpha_coeff
-    #     # Plot rectangles outside-in
-    #     for num, rectangle in enumerate(RadialProfile.annuli[::-1]):
-    #         try:
-    #             # RectangularAnnulus/RectangularSandwich attributes
-    #             width = rectangle.w_out
-    #             height = rectangle.h_out
-    #         except AttributeError:
-    #             # RectangularAperture attributes
-    #             width = rectangle.w
-    #             height = rectangle.h
-    #         xy = (rectangle.positions[0] - height / 2, rectangle.positions[1] + width / 2)
-    #         xy = rotate_ccw(*xy, rectangle.theta + np.pi / 2, origin=rectangle.positions)
-    #         rect = mpl.patches.Rectangle(
-    #             xy=xy,
-    #             width=width,
-    #             height=height,
-    #             angle=np.rad2deg(rectangle.theta) % 360.0,  # same convention as PA
-    #             alpha=alpha_coeff * (num + 1) / len(RadialProfile.annuli),
-    #             **kwargs,
-    #         )
-    #         ax.add_patch(rect)
-    # else:  # low-inclination galaxies
-    #     alpha_coeff = 0.3 if alpha_coeff is None else alpha_coeff
-    #     # Plot annuli outside-in
-    #     for num, annulus in enumerate(RadialProfile.annuli[::-1]):
-    #         try:
-    #             # EllipticalAnnulus attributes
-    #             width = annulus.b_out
-    #             height = annulus.a_out
-    #         except AttributeError:
-    #             # EllipticalAperture attributes
-    #             width = annulus.b
-    #             height = annulus.a
-    #         ellipse = mpl.patches.Ellipse(
-    #             xy=annulus.positions,
-    #             width=width * 2,  # full major/minor axis
-    #             height=height * 2,  # full major/minor axis
-    #             angle=(np.rad2deg(annulus.theta) - 90) % 360.0,  # PA is 0 deg at North
-    #             alpha=alpha_coeff * (num + 1) / len(RadialProfile.annuli),
-    #             **kwargs,
-    #         )
-    #         ax.add_patch(ellipse)
 
 
 def lognorm_median(r_data, g_data, b_data, a=1000, norm_factor=1000):
