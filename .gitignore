@@ -139,16 +139,20 @@ ngvs_data_old/
 vertico_data/
 vertico_data_old/
 sed_fits/
+binned_data/
 
 # Non-code files
 *.pdf
 *.png
 *.jpg
 
-# Include pdf files in galaxies/ folder and its subfolders
+# Include pdf files in galaxies/ and compiled_results/ folders and their subfolders
 !galaxies/**/*.pdf
 !galaxies/**/*.png
 !galaxies/**/*.jpg
+!compiled_results/**/*.pdf
+!compiled_results/**/*.png
+!compiled_results/**/*.jpg
 
 # Pickle files
 *.pkl

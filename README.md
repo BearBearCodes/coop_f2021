@@ -83,7 +83,7 @@ density radial profiles**. Includes steps for regular binning, Voronoi binning,
 colour-colour to mass-to-light ratio lookup table generation, and radial profile creation.
 
 More details in the
-[`README_stellar_mass_pipeline`](stellar_mass_pipeline/README_stellar_mass_pipeline.md)
+[`README_stellar_mass_pipeline.md`](stellar_mass_pipeline/README_stellar_mass_pipeline.md)
 file.
 
 ## [`galaxies` Folder](galaxies/)
@@ -107,3 +107,7 @@ Just has some matplotlib stylesheets that I use for my beamer presentations.
 Contains a selection of results from the [`galaxies` folder](galaxies/) as well as some
 sample code used to create these data products. Like the [`galaxies` folder](galaxies/),
 no pickle files are included so contact me if you need the data products.
+
+More details in the
+[`README_compiled_results.md`](compiled_results/README_compiled_results.md)
+file.
