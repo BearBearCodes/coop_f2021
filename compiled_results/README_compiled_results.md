@@ -53,3 +53,12 @@ their uncertainties. Please read the note in
 to interpret the ordering of the mosaic (short answer: don't take the ordering too
 seriously). The notebook linked above also shows how to generate all the gas fraction
 profiles and their plots.
+
+# [Halpha](Halpha/)
+
+Contains radial profile plots of Halpha data from VESTIGE. The Halpha data use the same
+Voronoi tesselation pattern as the NGVS data. The Halpha radial profiles use annuli with a
+minimum width equal to the minimum width used in NGVS high-resolution radial profiles. The
+process of how we apply the Voronoi binning pattern to Halpha data as well as how we
+generate the radial profiles can be found in
+[`NGC4380_Halpha_tutorial.ipynb`](Halpha/NGC4380_Halpha_tutorial.ipynb).
