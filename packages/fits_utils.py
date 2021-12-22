@@ -847,12 +847,22 @@ def reproject_arr_to_shape(
     Reprojects an array and WCS to a specified shape WITHOUT binning the array.
 
     Parameters:
+      arr :: 2D array
+        The array to reproject
+      wcs :: `astropy.wcs.WCS` object
+        The WCS of the input array
       shape :: 2-tuple of ints
         (y, x) shape (not (x, y) shape!) of desired output array
+      reproject_func :: `reproject` function (optional)
+        The reprojection function to use (e.g., `reproject_interp`, `reproject_exact`)
+      print_debug :: bool (optional)
+        If True, print some values that may be useful for debugging
 
     Returns: reprojected_arr, reprojected_wcs
-
-    TODO: finish docstring
+      reprojected_arr :: 2D array
+        The input array that has been reprojected to the desired shape
+      reprojected_wcs :: `astropy.wcs.WCS` object
+        The WCS of the reprojected array
     """
     if print_debug:
         print("arr.shape (y, x):", arr.shape)
@@ -901,8 +911,21 @@ def bin_arr_to_shape(
     WCS.
 
     Parameters:
+      arr :: 2D array
+        The array to reproject & bin
+      wcs :: `astropy.wcs.WCS` object
+        The WCS of the input array
       shape :: 2-tuple of ints
         (y, x) shape (not (x, y) shape!) of desired output array
+      reproject_func :: `reproject` function (optional)
+        The reprojection function to use (e.g., `reproject_interp`, `reproject_exact`)
+      bin_func :: `numpy` function (optional)
+        The binning function to use (i.e., `np.sum`, `np.nansum`)
+      bin_quadrature :: bool (optional)
+        If True, apply bin_func to the input array in quadrature. Use this if the input
+        array represents uncertainties (as an example)
+      print_debug :: bool (optional)
+        If True, print some values that may be useful for debugging
       no_extrapolate :: bool (optional)
         If True, ensure the reprojected array does not extend beyond the original array
         (i.e., prevent NaNs). Note that if no_extrapolate is False, it does not
@@ -910,9 +933,17 @@ def bin_arr_to_shape(
         that it has the option to fill unknown values with NaNs
 
     Returns: reprojected_arr, reprojected_wcs, binned_arr, binned_wcs
-
-    TODO: finish docstring
+      reprojected_arr :: 2D array
+        The input array that has been reprojected before binning
+      reprojected_wcs :: `astropy.wcs.WCS` object
+        The WCS of the reprojected array
+      binned_arr :: 2D array
+        The reprojected array that has been binned to the desired shape
+      binned_wcs :: `astropy.wcs.WCS` object
+        The WCS of the binned array
     """
+    from astropy.nddata import block_reduce
+
     if print_debug:
         print("arr.shape (y, x):", arr.shape)
         print("desired shape (y, x):", shape)
