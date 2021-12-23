@@ -13,7 +13,6 @@ import numpy as np
 import pandas as pd
 import reproject
 
-# from astropy.io import fits
 from astropy.nddata import Cutout2D
 from astropy.wcs import WCS
 from astropy.wcs.utils import proj_plane_pixel_scales
